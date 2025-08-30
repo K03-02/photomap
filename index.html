@@ -30,4 +30,17 @@ markers.forEach(function(m){
 var img = m.getElement().querySelector('img');
 if(img){ img.style.width = Math.min(50*scale, 60) + 'px'; img.style.height = Math.min(50*scale, 60) + 'px'; }
 });});
+
+map.on('zoomend', function(){
+    var zoom = map.getZoom();
+    var scale = Math.min(60/50, zoom / 5);
+    markers.forEach(function(m){
+        var img = m.getElement().querySelector('img');
+        if(img){
+            img.style.width = (50*scale) + 'px';
+            img.style.height = (50*scale) + 'px';
+        }
+    });
+});
+
 </script></body></html>
