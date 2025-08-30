@@ -1,34 +1,24 @@
 name: Update Photo Map
 
-# 5分ごとに自動実行 & 手動実行も可能
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/5 * * * *'  # 5分ごと
 
 jobs:
-  update-map:
+  update:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
+      - uses: actions/checkout@v3
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: |
-          pip install --quiet google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
-
-      - name: Run photo map script
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
+      - name: Run update script
         env:
+          FOLDER_ID: ${{ secrets.FOLDER_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FOLDER_ID: '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # あなたの Drive フォルダID
-          HTML_NAME: 'index.html'
-          BRANCH_NAME: 'main'
-          REPO_NAME: 'K03-02/photomap'
-        run: |
-          python your_script.py
+          REPO_NAME: ${{ github.repository }}
+        run: python update_photos.py
