@@ -1,33 +1,35 @@
-name: Generate Photo Map
+name: Auto Generate Photo Map
 
 on:
   schedule:
+    # 5分おき (cron は UTC 時間)
     - cron: '*/5 * * * *'
-  workflow_dispatch:
+  workflow_dispatch:  # 手動実行も可能
 
 jobs:
-  build:
+  generate-map:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub pandas
+      - name: Install dependencies
+        run: |
+          pip install --quiet google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
 
-    - name: Run generate_map.py
-      env:
-        FOLDER_ID: ${{ secrets.FOLDER_ID }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        REPO_NAME: ${{ secrets.REPO_NAME }}
-        HTML_NAME: ${{ secrets.HTML_NAME }}
-        BRANCH_NAME: ${{ secrets.BRANCH_NAME }}
-      run: |
-        python scripts/generate_map.py
+      - name: Run generate_map.py
+        env:
+          FOLDER_ID: ${{ secrets.FOLDER_ID }}
+          HTML_NAME: ${{ secrets.HTML_NAME }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+          BRANCH_NAME: ${{ secrets.BRANCH_NAME }}
+          SERVICE_ACCOUNT_FILE: ${{ secrets.SERVICE_ACCOUNT_FILE }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/generate_map.py
