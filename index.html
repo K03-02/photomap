@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Photo Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style> #map { height: 100vh; } </style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+var map = L.map("map").setView([0,0], 2);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19}).addTo(map);
+
+L.marker([34.90168055555555, 138.92558333333332]).addTo(map)
+  .bindPopup('<b>IMG_3484.HEIC</b><br><img src="IMG_3484.HEIC" width="200"/>');
+
+
+L.marker([35.01961388888889, 138.89616388888888]).addTo(map)
+  .bindPopup('<b>IMG_3509.HEIC</b><br><img src="IMG_3509.HEIC" width="200"/>');
+
+</script></body></html>
