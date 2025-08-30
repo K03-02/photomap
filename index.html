@@ -3,7 +3,10 @@
 <head>
 <meta charset='utf-8'>
 <title>Photo Map</title>
-<style>#map { height: 100vh; width: 100%; }</style>
+<style>
+#map { height: 100vh; width: 100%; }
+.circle-marker img { border-radius: 50%; object-fit: cover; width:50px; height:50px; }
+</style>
 <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
 <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
 </head>
@@ -12,6 +15,28 @@
 <script>
 var map = L.map('map').setView([35.0, 138.0], 5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);
+
+var icon = L.icon({
+    iconUrl: 'https://drive.google.com/uc?id=1C7DvwU86lClJyvWHCY2ldjX0tKuNo8aB',
+    iconSize: [50,50],
+    className: 'circle-marker'
+});
+L.marker([34.90168055555555,138.92558333333332], {icon: icon}).addTo(map)
+.bindPopup("<b>IMG_3484.HEIC</b><br>2025:08:15 14:53:13<br>"
++ "<a href='https://www.google.com/maps/search/?api=1&query=34.90168055555555,138.92558333333332' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='https://drive.google.com/uc?id=1C7DvwU86lClJyvWHCY2ldjX0tKuNo8aB' width='200'/>");
+
+
+var icon = L.icon({
+    iconUrl: 'https://drive.google.com/uc?id=1gABHd_F2lUSHoufoTl0xO1iXefTG_Tgv',
+    iconSize: [50,50],
+    className: 'circle-marker'
+});
+L.marker([35.01961388888889,138.89616388888888], {icon: icon}).addTo(map)
+.bindPopup("<b>IMG_3509.HEIC</b><br>2025:08:16 10:28:01<br>"
++ "<a href='https://www.google.com/maps/search/?api=1&query=35.01961388888889,138.89616388888888' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='https://drive.google.com/uc?id=1gABHd_F2lUSHoufoTl0xO1iXefTG_Tgv' width='200'/>");
+
 </script>
 </body>
 </html>
