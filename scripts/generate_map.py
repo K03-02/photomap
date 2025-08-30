@@ -2,11 +2,10 @@ import os
 import io
 import json
 import base64
-import datetime
 import pandas as pd
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
-from PIL import Image
+from PIL import Image, ImageDraw
 import pyheif
 import exifread
 from github import Github
@@ -16,8 +15,9 @@ BRANCH_NAME = os.getenv("BRANCH_NAME", "gh-pages")
 FOLDER_ID = os.getenv("FOLDER_ID")
 HTML_NAME = os.getenv("HTML_NAME", "index.html")
 REPO_NAME = os.getenv("REPO_NAME")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
-# Service Account JSON は secrets に文字列として保存 → デコードして一時ファイル化
+# ==== Service Account JSON 読み込み ====
 drive_credentials_json = os.getenv("DRIVE_CREDENTIALS_JSON")
 service_account_info = json.loads(drive_credentials_json)
 credentials = service_account.Credentials.from_service_account_info(
@@ -29,7 +29,7 @@ credentials = service_account.Credentials.from_service_account_info(
 drive_service = build("drive", "v3", credentials=credentials)
 
 # ==== GitHub 認証 ====
-g = Github(os.getenv("GITHUB_TOKEN"))
+g = Github(GITHUB_TOKEN)
 repo = g.get_repo(REPO_NAME)
 
 # ==== キャッシュファイル ====
@@ -40,119 +40,100 @@ if os.path.exists(CACHE_FILE):
 else:
     processed_files = set()
 
-def get_file_bytes(file_id, filename):
-    request = drive_service.files().get_media(fileId=file_id)
+# ==== ヘルパー関数 ====
+def get_file_bytes(file_id):
     fh = io.BytesIO()
+    request = drive_service.files().get_media(fileId=file_id)
     downloader = build("drive", "v3", credentials=credentials)._http.request(request.uri)
     return fh.getvalue()
 
-def extract_exif(file_bytes, mime_type):
+def pil_open_safe(file_bytes, mime_type):
     try:
-        if mime_type == "image/heic" or mime_type == "image/heif":
+        if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            image = Image.frombytes(
+            return Image.frombytes(
                 heif_file.mode,
                 heif_file.size,
                 heif_file.data,
                 "raw",
-                heif_file.mode,
-                heif_file.stride,
+                heif_file.mode
             )
         else:
-            image = Image.open(io.BytesIO(file_bytes))
+            return Image.open(io.BytesIO(file_bytes))
+    except Exception as e:
+        print(f"⚠️ Cannot open image: {e}")
+        return None
 
-        file_like = io.BytesIO(file_bytes)
-        tags = exifread.process_file(file_like, details=False)
-
-        if "GPS GPSLatitude" in tags and "GPS GPSLongitude" in tags:
-            lat = convert_to_degrees(tags["GPS GPSLatitude"])
-            lon = convert_to_degrees(tags["GPS GPSLongitude"])
-            if str(tags.get("GPS GPSLatitudeRef")) == "S":
-                lat = -lat
-            if str(tags.get("GPS GPSLongitudeRef")) == "W":
-                lon = -lon
+def extract_exif(file_bytes, mime_type):
+    lat, lon, dt = None, None, None
+    try:
+        if 'heic' in mime_type.lower():
+            heif_file = pyheif.read_heif(file_bytes)
+            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            fbytes = io.BytesIO()
+            img.save(fbytes, format='JPEG')
+            fbytes.seek(0)
+            tags = exifread.process_file(fbytes, details=False)
         else:
-            lat, lon = None, None
+            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
 
-        dt = tags.get("EXIF DateTimeOriginal", None)
-        return lat, lon, str(dt)
+        if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
+            def dms_to_dd(dms, ref):
+                deg = float(dms.values[0].num)/dms.values[0].den
+                min_ = float(dms.values[1].num)/dms.values[1].den
+                sec = float(dms.values[2].num)/dms.values[2].den
+                dd = deg + min_/60 + sec/3600
+                if ref.values not in ['N','E']:
+                    dd = -dd
+                return dd
+            lat = dms_to_dd(tags['GPS GPSLatitude'], tags['GPS GPSLatitudeRef'])
+            lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
+        if 'EXIF DateTimeOriginal' in tags:
+            dt = str(tags['EXIF DateTimeOriginal'])
     except Exception as e:
         print(f"⚠️ Cannot extract EXIF: {e}")
-        return None, None, None
+    return lat, lon, dt
 
-def convert_to_degrees(value):
-    d = float(value.values[0].num) / float(value.values[0].den)
-    m = float(value.values[1].num) / float(value.values[1].den)
-    s = float(value.values[2].num) / float(value.values[2].den)
-    return d + (m / 60.0) + (s / 3600.0)
-
-# ==== ファイル一覧取得 ====
+# ==== 画像一覧取得 ====
 results = drive_service.files().list(
     q=f"'{FOLDER_ID}' in parents and (mimeType contains 'image/')",
     fields="files(id, name, mimeType, modifiedTime)"
 ).execute()
-
 files = results.get("files", [])
 
 rows = []
-new_files = []
-
 for f in files:
     if f["id"] in processed_files:
         continue
     print(f"Processing {f['name']}...")
-    try:
-        file_bytes = drive_service.files().get_media(fileId=f["id"]).execute()
-        lat, lon, dt = extract_exif(file_bytes, f["mimeType"])
-        if lat and lon:
-            rows.append({
-                "filename": f["name"],
-                "lat": lat,
-                "lon": lon,
-                "datetime": dt,
-            })
-        processed_files.add(f["id"])
-        new_files.append(f["id"])
-    except Exception as e:
-        print(f"⚠️ Skip {f['name']} ({e})")
+    file_bytes = get_file_bytes(f["id"])
+    lat, lon, dt = extract_exif(file_bytes, f["mimeType"])
+    if lat and lon:
+        rows.append({"filename": f["name"], "lat": lat, "lon": lon, "datetime": dt})
+    processed_files.add(f["id"])
 
-# ==== 保存 ====
+# ==== キャッシュ保存 ====
 with open(CACHE_FILE, "w") as f:
     json.dump(list(processed_files), f)
 
-# ==== HTML 出力 ====
-html_content = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8"/>
-<title>Photo Map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-</head>
-<body>
-<div id="map" style="height:100vh;"></div>
-<script>
-var map = L.map('map').setView([35, 135], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19
-}).addTo(map);
-"""
+# ==== HTML 作成 ====
+html_lines = [
+    "<!DOCTYPE html>",
+    "<html><head><meta charset='utf-8'><title>Photo Map</title>",
+    "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
+    "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>",
+    "</head><body><div id='map' style='height:100vh;'></div><script>",
+    "var map = L.map('map').setView([35,135], 5);",
+    "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);"
+]
 
 for row in rows:
-    html_content += f"""
-L.marker([{row['lat']}, {row['lon']}]).addTo(map)
-  .bindPopup("<b>{row['filename']}</b><br>{row['datetime']}");
-"""
+    html_lines.append(f"L.marker([{row['lat']},{row['lon']}]).addTo(map).bindPopup('<b>{row['filename']}</b><br>{row['datetime']}');")
 
-html_content += """
-</script>
-</body>
-</html>
-"""
+html_lines.append("</script></body></html>")
+html_content = "\n".join(html_lines)
 
 # ==== GitHub Pages へアップロード ====
-branch = repo.get_branch(BRANCH_NAME)
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
     repo.update_file(contents.path, "Update map", html_content, contents.sha, branch=BRANCH_NAME)
