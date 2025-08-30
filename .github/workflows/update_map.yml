@@ -1,38 +1,36 @@
-name: Update Photo Map
+name: Generate Photo Map
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5分ごとに実行
-  workflow_dispatch:       # 手動実行も可能
+    # 5分おきに実行
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # 手動トリガーも可能
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.11
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
 
-      - name: Install dependencies
-        run: |
-          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
+    - name: Install dependencies
+      run: |
+        pip install --quiet google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
 
-      - name: Run map generation
-        env:
-          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
-          FOLDER_ID: '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python scripts/generate_map.py
-
-      - name: Commit updated data
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add data/processed_files.json
-          git commit -m "Update processed files" || echo "No changes to commit"
-          git push
+    - name: Run generate_map.py
+      env:
+        BRANCH_NAME: ${{ secrets.BRANCH_NAME }}
+        FOLDER_ID: ${{ secrets.FOLDER_ID }}
+        HTML_NAME: ${{ secrets.HTML_NAME }}
+        REPO_NAME: ${{ secrets.REPO_NAME }}
+        SERVICE_ACCOUNT_FILE: ${{ secrets.SERVICE_ACCOUNT_FILE }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        CACHE_FILE: /tmp/file_cache.json
+      run: |
+        python scripts/generate_map.py
