@@ -2,23 +2,37 @@ name: Update Photo Map
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5分ごと
+    - cron: '*/5 * * * *'  # 5分ごとに実行
+  workflow_dispatch:       # 手動実行も可能
 
 jobs:
-  update:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: 3.11
+
       - name: Install dependencies
         run: |
           pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
-      - name: Run update script
+
+      - name: Run map generation
         env:
-          FOLDER_ID: ${{ secrets.FOLDER_ID }}
+          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
+          FOLDER_ID: '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO_NAME: ${{ github.repository }}
-        run: python update_photos.py
+        run: |
+          python scripts/generate_map.py
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add data/processed_files.json
+          git commit -m "Update processed files" || echo "No changes to commit"
+          git push
