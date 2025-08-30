@@ -1,23 +1,38 @@
 import os
 import io
+import json
 import base64
 import pandas as pd
 from PIL import Image, ImageDraw
+import pyheif
+import exifread
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from google.oauth2 import service_account
 from github import Github
-import pyheif, exifread
 
-# ===== 環境変数 =====
+# ===== 環境変数から設定 =====
 FOLDER_ID = os.environ['FOLDER_ID']
-GITHUB_TOKEN = os.environ['GITHUB_TOKEN']
-REPO_NAME = os.environ['REPO_NAME']
 HTML_NAME = os.environ['HTML_NAME']
+REPO_NAME = os.environ['REPO_NAME']
 BRANCH_NAME = os.environ['BRANCH_NAME']
+SERVICE_ACCOUNT_FILE = os.environ['SERVICE_ACCOUNT_FILE']
+CACHE_FILE = 'file_cache.json'  # 読み込んだファイルのキャッシュ
 
-# ===== Drive API =====
-drive_service = build('drive', 'v3')
+# ===== Drive 認証 =====
+credentials = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE,
+    scopes=["https://www.googleapis.com/auth/drive.readonly"]
+)
+drive_service = build('drive', 'v3', credentials=credentials)
 
+# ===== ファイルキャッシュ読み込み =====
+if os.path.exists(CACHE_FILE):
+    with open(CACHE_FILE, 'r') as f:
+        file_cache = json.load(f)
+else:
+    file_cache = {}
+
+# ===== Drive ファイル取得 =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
     results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
@@ -26,30 +41,25 @@ def list_image_files(folder_id):
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
-    downloader = MediaIoBaseDownload(fh, request)
+    downloader = io.BufferedReader(request)
     done = False
     while not done:
         status, done = downloader.next_chunk()
     return fh.getvalue()
 
+# ===== PIL 安全オープン =====
 def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            pil_img = Image.frombytes(
-                heif_file.mode,
-                heif_file.size,
-                heif_file.data,
-                "raw",
-                heif_file.mode
-            )
+            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
         else:
-            pil_img = Image.open(io.BytesIO(file_bytes))
-        return pil_img
-    except Exception as e:
-        print(f"⚠️ Cannot open image: {e}")
+            img = Image.open(io.BytesIO(file_bytes))
+        return img
+    except:
         return None
 
+# ===== EXIF 抽出 =====
 def extract_exif(file_bytes, mime_type):
     lat, lon, dt = '', '', ''
     try:
@@ -80,10 +90,8 @@ def extract_exif(file_bytes, mime_type):
         pass
     return lat, lon, dt
 
-def heic_to_base64_circle(file_bytes, size=50):
-    img = pil_open_safe(file_bytes, 'image/heic')
-    if img is None:
-        return None
+# ===== Base64 変換 =====
+def img_to_base64_circle(img, size=50):
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
@@ -93,10 +101,7 @@ def heic_to_base64_circle(file_bytes, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def heic_to_base64_popup(file_bytes, width=200):
-    img = pil_open_safe(file_bytes, 'image/heic')
-    if img is None:
-        return None
+def img_to_base64_popup(img, width=200):
     w, h = img.size
     new_h = int(h * (width / w))
     img = img.resize((width, new_h))
@@ -104,11 +109,17 @@ def heic_to_base64_popup(file_bytes, width=200):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== 画像情報収集 =====
+# ===== HTML 作成 =====
 rows = []
 for f in list_image_files(FOLDER_ID):
+    if f['id'] in file_cache:
+        continue  # キャッシュにある場合はスキップ
     print(f"Processing {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
+    img = pil_open_safe(file_bytes, f['mimeType'])
+    if img is None:
+        print(f"⚠️ Skip {f['name']} (cannot open)")
+        continue
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
     rows.append({
         'filename': f['name'],
@@ -116,51 +127,65 @@ for f in list_image_files(FOLDER_ID):
         'longitude': lon,
         'datetime': dt,
         'file_id': f['id'],
-        'mime_type': f['mimeType']
+        'mime_type': f['mimeType'],
+        'icon_base64': img_to_base64_circle(img),
+        'popup_base64': img_to_base64_popup(img)
     })
+    file_cache[f['id']] = True
 
-df = pd.DataFrame(rows)
+# キャッシュ保存
+with open(CACHE_FILE, 'w') as f:
+    json.dump(file_cache, f)
 
-# ===== GitHub へアップロード =====
-g = Github(GITHUB_TOKEN)
-repo = g.get_repo(REPO_NAME)
+# ===== HTML生成 =====
+html_lines = [
+    "<!DOCTYPE html>",
+    "<html><head><meta charset='utf-8'><title>Photo Map</title>",
+    "<style>#map { height: 100vh; width: 100%; }</style>",
+    "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
+    "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>",
+    "<div id='map'></div><script>",
+    "var map = L.map('map').setView([35.0, 138.0], 5);",
+    "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
+    "var markers = [];",
+]
 
-try:
-    contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    html_str = contents.decoded_content.decode()
-    insert_pos = html_str.rfind('</script>')
-except:
-    html_str = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Photo Map</title></head><body><div id='map'></div><script>var markers=[];</script></body></html>"
-    insert_pos = html_str.rfind('</script>')
-
-# ===== 新規マーカー生成 =====
-marker_js = ""
-for _, row in df.iterrows():
-    if row['latitude'] and row['longitude']:
-        file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes)
-        popup_data_uri = heic_to_base64_popup(file_bytes)
-        if icon_data_uri and popup_data_uri:
-            marker_js += f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
-var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
+for r in rows:
+    if r['latitude'] and r['longitude']:
+        html_lines.append(f"""
+var icon = L.icon({{iconUrl: '{r['icon_base64']}', iconSize: [50,50]}}); 
+var marker = L.marker([{r['latitude']},{r['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
-marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}' width='200'/>");
-"""
-        else:
-            print(f"⚠️ Skip {row['filename']} (cannot open)")
+marker.bindPopup("<b>{r['filename']}</b><br>{r['datetime']}<br>"
++ "<a href='https://www.google.com/maps/search/?api=1&query={r['latitude']},{r['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='{r['popup_base64']}' width='200'/>");
+""")
 
-# ===== HTML に追加 =====
-html_str = html_str[:insert_pos] + marker_js + html_str[insert_pos:]
+html_lines.append("""
+map.on('zoomend', function(){
+    var zoom = map.getZoom();
+    var scale = Math.min(zoom/5, 1.2);
+    markers.forEach(function(m){
+        var img = m.getElement().querySelector('img');
+        if(img){
+            var size = 50 * scale;
+            if(size>60){ size=60; }
+            img.style.width = size + 'px';
+            img.style.height = size + 'px';
+        }
+    });
+});
+""")
+html_lines.append("</script></body></html>")
+html_str = "\n".join(html_lines)
 
-# ===== GitHub に保存 =====
+# ===== GitHub 更新 =====
+g = Github(os.environ['GITHUB_TOKEN'])
+repo = g.get_repo(REPO_NAME)
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML with new markers", html_str, contents.sha, branch=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
