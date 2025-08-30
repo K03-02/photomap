@@ -9,7 +9,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).
 var markers = [];
 var baseZoom = 5;
 var minSize = 20;
-var maxSize = 80;
+var maxSize = 60;
 
 var scale = map.getZoom()/baseZoom;
 var size = Math.max(minSize, Math.min(maxSize, 40*scale));
