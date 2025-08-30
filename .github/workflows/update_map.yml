@@ -13,15 +13,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
+    - name: Install system dependencies
+      run: sudo apt-get update && sudo apt-get install -y libheif-dev
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
-
-    - name: Install system dependencies for HEIC
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libheif-dev
 
     - name: Install Python dependencies
       run: |
@@ -37,4 +35,5 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python scripts/generate_map.py
+
 
