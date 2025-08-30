@@ -1,10 +1,9 @@
 name: Generate Photo Map
 
-# 定期実行（5分おき）
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5分ごと
-  workflow_dispatch:       # 手動実行も可能
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -21,7 +20,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
+        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub pandas
 
     - name: Run generate_map.py
       env:
@@ -32,4 +31,3 @@ jobs:
         BRANCH_NAME: ${{ secrets.BRANCH_NAME }}
       run: |
         python scripts/generate_map.py
-
