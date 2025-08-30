@@ -26,7 +26,7 @@ marker.bindPopup("<b>IMG_3509.HEIC</b><br>2025:08:16 10:28:01<br>"
 
 map.on('zoomend', function(){
     var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2);
+    var scale = Math.min(zoom/5, 1.2);  // 最大60pxになるよう制限
     markers.forEach(function(m){
         var img = m.getElement().querySelector('img');
         if(img){
