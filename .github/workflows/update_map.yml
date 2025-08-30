@@ -1,10 +1,9 @@
 name: Auto Generate Photo Map
 
-# 5分ごとに自動実行 & 手動実行も可能
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/5 * * * *'  # 5分ごと
+  workflow_dispatch:      # 手動実行用
 
 jobs:
   build:
@@ -19,7 +18,12 @@ jobs:
       with:
         python-version: '3.11'
 
-    - name: Install dependencies
+    - name: Install system dependencies for HEIC
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libheif-dev
+
+    - name: Install Python dependencies
       run: |
         pip install --quiet pandas google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
 
@@ -33,3 +37,4 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python scripts/generate_map.py
+
