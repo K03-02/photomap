@@ -1,9 +1,10 @@
 name: Auto Generate Photo Map
 
+# 5分ごとに自動実行 & 手動実行も可能
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5分ごと
-  workflow_dispatch:      # 手動実行用
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -29,6 +30,6 @@ jobs:
         FOLDER_ID: ${{ secrets.FOLDER_ID }}
         HTML_NAME: ${{ secrets.HTML_NAME }}
         REPO_NAME: ${{ secrets.REPO_NAME }}
-        SERVICE_ACCOUNT_FILE: ${{ secrets.SERVICE_ACCOUNT_FILE }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         python scripts/generate_map.py
