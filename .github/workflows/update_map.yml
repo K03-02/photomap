@@ -1,10 +1,10 @@
 name: Generate Photo Map
 
+# 定期実行（5分おき）
 on:
   schedule:
-    # 5分おき
-    - cron: '*/5 * * * *'
-  workflow_dispatch:  # 手動実行も可能
+    - cron: '*/5 * * * *'  # 5分ごと
+  workflow_dispatch:       # 手動実行も可能
 
 jobs:
   build:
@@ -17,19 +17,19 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: 3.11
+        python-version: '3.11'
 
     - name: Install dependencies
       run: |
-        pip install --quiet google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
+        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
 
-    - name: Run script
+    - name: Run generate_map.py
       env:
-        BRANCH_NAME: ${{ secrets.BRANCH_NAME }}
-        DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
         FOLDER_ID: ${{ secrets.FOLDER_ID }}
-        HTML_NAME: ${{ secrets.HTML_NAME }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         REPO_NAME: ${{ secrets.REPO_NAME }}
-        SERVICE_ACCOUNT_FILE: ${{ secrets.SERVICE_ACCOUNT_FILE }}
+        HTML_NAME: ${{ secrets.HTML_NAME }}
+        BRANCH_NAME: ${{ secrets.BRANCH_NAME }}
       run: |
         python scripts/generate_map.py
+
