@@ -1,8 +1,8 @@
-name: Generate Map
+name: Generate Photo Map
 
 on:
-#  schedule:
-#    - cron: "*/5 * * * *"  # 5分ごと
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -16,20 +16,16 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: "3.11"
+        python-version: 3.11
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib pillow
-
-    - name: Decode service account
-      run: |
-        echo "$SERVICE_ACCOUNT_B64" | tr -d '\r' | base64 --decode > sa.json
-      env:
-        SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
+        pip install -r requirements.txt
 
     - name: Run generate_map.py
-      run: python scripts/generate_map.py
       env:
-        GOOGLE_APPLICATION_CREDENTIALS: sa.json
+        SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
+      run: |
+        echo "$SERVICE_ACCOUNT_B64" | base64 --decode > sa.json
+        python scripts/generate_map.py
