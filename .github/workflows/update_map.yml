@@ -1,39 +1,35 @@
-name: Auto Generate Photo Map
+name: Update Photo Map
 
 on:
-#  schedule:
-#    - cron: '*/5 * * * *'  # 5分ごと
-  workflow_dispatch:      # 手動実行用
+  workflow_dispatch:    # 手動実行
+  schedule:
+    - cron: '*/5 * * * *' # 毎時実行（不要なら削除）
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Install system dependencies
-      run: sudo apt-get update && sudo apt-get install -y libheif-dev
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 \
+                      PyGithub Pillow pyheif exifread pandas
 
-    - name: Install Python dependencies
-      run: |
-        pip install --quiet pandas google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub
-
-    - name: Run map generation script
-      env:
-        BRANCH_NAME: ${{ secrets.BRANCH_NAME }}
-        DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
-        FOLDER_ID: ${{ secrets.FOLDER_ID }}
-        HTML_NAME: ${{ secrets.HTML_NAME }}
-        REPO_NAME: ${{ secrets.REPO_NAME }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        python scripts/generate_map.py
-
-
+      - name: Run script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_NAME: ${{ github.repository }}
+          BRANCH_NAME: main
+          FOLDER_ID: ${{ secrets.FOLDER_ID }}
+          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
+          HTML_NAME: index.html
+        run: python scripts/generate_map.py
