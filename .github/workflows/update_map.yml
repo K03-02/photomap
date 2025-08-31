@@ -1,9 +1,8 @@
 name: Generate Map
 
 on:
-  schedule:
-    # UTC で 5 分ごとに実行
-    - cron: "*/5 * * * *"
+#  schedule:
+#    - cron: "*/5 * * * *"  # 5分ごと
   workflow_dispatch:
 
 jobs:
@@ -22,7 +21,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
+        pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib pillow
 
     - name: Decode service account
       run: |
@@ -31,5 +30,6 @@ jobs:
         SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
 
     - name: Run generate_map.py
-      run: |
-        python scripts/generate_map.py
+      run: python scripts/generate_map.py
+      env:
+        GOOGLE_APPLICATION_CREDENTIALS: sa.json
