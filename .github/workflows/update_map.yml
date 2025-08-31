@@ -1,4 +1,4 @@
-name: Generate Photo Map
+name: Deploy Photo Map
 
 on:
   push:
@@ -11,40 +11,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # リポジトリをチェックアウト
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Python をセットアップ
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      # 依存パッケージをインストール
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install google-api-python-client
-          pip install google-auth-httplib2
-          pip install google-auth-oauthlib
-          pip install pillow
-          pip install pyheif
-          pip install exifread
-          pip install PyGithub
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread
 
-      # スクリプト実行（サービスアカウント JSON を secrets から受け取る）
-      - name: Generate map
+      - name: Generate HTML
         env:
-          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVICE_ACCOUNT_FILE: ${{ secrets.SERVICE_ACCOUNT_FILE }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
         run: |
-          echo "$GOOGLE_SERVICE_ACCOUNT" > service_account.json
           python scripts/generate_map.py
 
-      # 出力を GitHub Pages にデプロイ
       - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
+        uses: peaceiris/actions-gh-pages@v6
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./output
