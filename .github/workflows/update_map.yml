@@ -36,10 +36,8 @@ jobs:
       env:
         SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
 
-    - name: Deploy map.html to GitHub Pages
+    - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./map.html
-        # もし thumbs フォルダも必要なら下記のように変更
-        # publish_dir: ./  （map.html と thumbs/ を含める）
+        publish_dir: ./
