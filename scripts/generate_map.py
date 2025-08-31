@@ -50,9 +50,7 @@ def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            pil_img = Image.frombytes(
-                heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
-            )
+            pil_img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
         else:
             pil_img = Image.open(io.BytesIO(file_bytes))
         return pil_img
@@ -158,7 +156,7 @@ with open(CACHE_FILE, 'w') as f:
 
 df = pd.DataFrame(rows)
 
-# ===== Leaflet で HTML 生成（ズーム連動丸アイコン対応）=====
+# ===== Leaflet で HTML 生成（Google Maps API 不使用）=====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -181,11 +179,7 @@ for _, row in df.iterrows():
             html_lines.append(f"""
 var lat = {row['latitude']};
 var lon = {row['longitude']};
-var icon = L.divIcon({{
-    className: 'photo-marker',
-    html: `<div style="width:50px; height:50px; border-radius:50%; background-image:url({icon_data_uri}); background-size:cover;"></div>`,
-    iconSize: [50,50]
-}});
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
 var marker = L.marker([lat, lon], {{icon: icon}}).addTo(map);
 markers.push(marker);
 bounds.extend([lat, lon]);
@@ -194,18 +188,19 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
 
-# ズーム連動＆全マーカーにフィット
+# ズーム連動（アイコンサイズ可変）＆ 全マーカーにフィット
 html_lines.append("""
 if (!bounds.isEmpty()) { map.fitBounds(bounds.pad(0.2)); }
 
 map.on('zoomend', function(){
     var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2);  // 最大 60px
-    document.querySelectorAll('.photo-marker div').forEach(function(div){
+    var scale = Math.min(zoom/5, 1.2);
+    markers.forEach(function(m){
         var size = 50 * scale;
-        if(size>60){ size=60; }
-        div.style.width = size + 'px';
-        div.style.height = size + 'px';
+        if(size>60) size = 60;
+        var icon = m.options.icon;
+        var newIcon = L.icon({iconUrl: icon.options.iconUrl, iconSize: [size, size]});
+        m.setIcon(newIcon);
     });
 });
 """)
@@ -226,3 +221,4 @@ def upsert_file(path, content, message):
 upsert_file(HTML_NAME, html_str, "update HTML (Leaflet)")
 upsert_file(CACHE_FILE, json.dumps(cached_files), "update cache")
 print("✅ Done.")
+
