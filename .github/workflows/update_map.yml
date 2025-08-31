@@ -2,8 +2,8 @@ name: Update Photo Map
 
 on:
   workflow_dispatch:    # 手動実行
-  schedule:
-    - cron: '*/5 * * * *' # 毎時実行（不要なら削除）
+ # schedule:
+#    - cron: '*/5 * * * *' # 毎時実行（不要なら削除）
 
 jobs:
   build:
