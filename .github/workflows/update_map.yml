@@ -1,33 +1,35 @@
-name: Generate Photo Map
+name: Generate Map
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5分ごとに実行
-  workflow_dispatch:  # 手動実行も可能
+    # UTC で 5 分ごとに実行
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}  # Secret を環境変数に渡す
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.11
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
 
-      - name: Decode service account
-        run: |
-          echo "$SERVICE_ACCOUNT_B64" | base64 --decode > sa.json
+    - name: Decode service account
+      run: |
+        echo "$SERVICE_ACCOUNT_B64" | tr -d '\r' | base64 --decode > sa.json
+      env:
+        SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
 
-      - name: Generate Map
-        run: |
-          python scripts/generate_map.py
+    - name: Run generate_map.py
+      run: |
+        python scripts/generate_map.py
