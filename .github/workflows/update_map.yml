@@ -1,8 +1,8 @@
 name: Auto Generate Photo Map
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'  # 5分ごと
+#  schedule:
+#    - cron: '*/5 * * * *'  # 5分ごと
   workflow_dispatch:      # 手動実行用
 
 jobs:
