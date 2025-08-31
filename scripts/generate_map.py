@@ -38,9 +38,10 @@ def download_file(file_id, file_name):
     while not done:
         status, done = downloader.next_chunk()
     fh.seek(0)
-    with open(file_name, 'wb') as f:
+    file_path = os.path.join("publish", file_name)
+    with open(file_path, 'wb') as f:
         f.write(fh.read())
-    return file_name
+    return file_path
 
 def create_thumbnail(file_path, thumb_path, size=(128,128)):
     try:
@@ -87,7 +88,7 @@ def extract_gps(file_path):
         print(f"Failed to extract GPS from {file_path}: {e}")
         return None, None
 
-def generate_map_html(photo_list, output_file="map.html"):
+def generate_map_html(photo_list, output_file="publish/map.html"):
     html_content = """
 <!DOCTYPE html>
 <html>
@@ -120,23 +121,22 @@ L.marker([{lat},{lon}]).addTo(map).bindPopup('<img src="{thumb}" width="128"/>')
     print(f"Map saved to {output_file}")
 
 def main():
+    os.makedirs("publish/thumbs", exist_ok=True)
     photos = list_photos()
     photo_data = []
-    os.makedirs("thumbs", exist_ok=True)
 
     for p in photos:
         print(f"Processing {p['name']}...")
         file_path = download_file(p['id'], p['name'])
-        thumb_path = f"thumbs/{p['name']}.png"
+        thumb_path = os.path.join("publish", "thumbs", f"{p['name']}.png")
         thumb_result = create_thumbnail(file_path, thumb_path)
         if thumb_result is None:
             continue
 
         lat, lon = extract_gps(file_path)
-        photo_data.append({'thumb': thumb_path, 'gps': (lat, lon)})
+        photo_data.append({'thumb': f"thumbs/{p['name']}.png", 'gps': (lat, lon)})
 
     generate_map_html(photo_data)
 
 if __name__ == "__main__":
     main()
-
