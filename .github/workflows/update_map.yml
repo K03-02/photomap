@@ -1,35 +1,50 @@
-name: Update Photo Map
+name: Generate Photo Map
 
 on:
-  workflow_dispatch:    # 手動実行
- # schedule:
-#    - cron: '*/5 * * * *' # 毎時実行（不要なら削除）
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # リポジトリをチェックアウト
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
+      # Python をセットアップ
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
+      # 依存パッケージをインストール
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 \
-                      PyGithub Pillow pyheif exifread pandas
+          pip install --upgrade pip
+          pip install google-api-python-client
+          pip install google-auth-httplib2
+          pip install google-auth-oauthlib
+          pip install pillow
+          pip install pyheif
+          pip install exifread
+          pip install PyGithub
 
-      - name: Run script
+      # スクリプト実行（サービスアカウント JSON を secrets から受け取る）
+      - name: Generate map
         env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO_NAME: ${{ github.repository }}
-          BRANCH_NAME: main
-          FOLDER_ID: ${{ secrets.FOLDER_ID }}
-          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
-          HTML_NAME: index.html
-        run: python scripts/generate_map.py
+        run: |
+          echo "$GOOGLE_SERVICE_ACCOUNT" > service_account.json
+          python scripts/generate_map.py
+
+      # 出力を GitHub Pages にデプロイ
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./output
