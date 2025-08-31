@@ -137,6 +137,7 @@ for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
+
     print(f"Processing {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
@@ -151,12 +152,13 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
+# キャッシュ保存（ローカル）
 with open(CACHE_FILE, 'w') as f:
     json.dump(cached_files, f)
 
 df = pd.DataFrame(rows)
 
-# ===== Leaflet で HTML 生成 =====
+# ===== Leaflet で HTML 生成（ズーム連動丸アイコン対応）=====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -177,9 +179,13 @@ for _, row in df.iterrows():
         popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
 var lat = {row['latitude']};
 var lon = {row['longitude']};
+var icon = L.divIcon({{
+    className: 'photo-marker',
+    html: `<div style="width:50px; height:50px; border-radius:50%; background-image:url({icon_data_uri}); background-size:cover;"></div>`,
+    iconSize: [50,50]
+}});
 var marker = L.marker([lat, lon], {{icon: icon}}).addTo(map);
 markers.push(marker);
 bounds.extend([lat, lon]);
@@ -188,19 +194,18 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
 
+# ズーム連動＆全マーカーにフィット
 html_lines.append("""
 if (!bounds.isEmpty()) { map.fitBounds(bounds.pad(0.2)); }
 
 map.on('zoomend', function(){
     var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2);
-    markers.forEach(function(m){
-        var img = m.getElement().querySelector('img');
-        if(img){
-            var size = 50 * scale; if(size>60){ size=60; }
-            img.style.width = size + 'px';
-            img.style.height = size + 'px';
-        }
+    var scale = Math.min(zoom/5, 1.2);  // 最大 60px
+    document.querySelectorAll('.photo-marker div').forEach(function(div){
+        var size = 50 * scale;
+        if(size>60){ size=60; }
+        div.style.width = size + 'px';
+        div.style.height = size + 'px';
     });
 });
 """)
@@ -208,7 +213,7 @@ map.on('zoomend', function(){
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
-# ===== GitHub へアップロード =====
+# ===== GitHub へ HTML / キャッシュ をアップロード =====
 def upsert_file(path, content, message):
     try:
         c = repo.get_contents(path, ref=BRANCH_NAME)
@@ -221,4 +226,3 @@ def upsert_file(path, content, message):
 upsert_file(HTML_NAME, html_str, "update HTML (Leaflet)")
 upsert_file(CACHE_FILE, json.dumps(cached_files), "update cache")
 print("✅ Done.")
-
