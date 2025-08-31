@@ -1,8 +1,27 @@
 <!DOCTYPE html>
-<html><head><meta charset='utf-8'><title>Photo Map</title>
-<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
-<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
-</head><body><div id='map' style='height:100vh;'></div><script>
-var map = L.map('map').setView([35,135],5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-</script></body></html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Photo Map</title>
+  <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
+  <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+</head>
+<body>
+  <div id='map' style='height:100vh;'></div>
+  <script>
+    var map = L.map('map').setView([35, 135], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    var markers = [
+      
+    ];
+
+    markers.forEach(function(m) {
+      var img = "<img src='data:image/jpeg;base64," + m[2] + "' width='200'/>";
+      L.marker([m[0], m[1]]).addTo(map).bindPopup(img);
+    });
+  </script>
+</body>
+</html>
