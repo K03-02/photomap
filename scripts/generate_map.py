@@ -5,6 +5,13 @@ from PIL import Image
 from io import BytesIO
 import exifread
 
+# 保存先フォルダを作成
+PHOTO_DIR = "photos"
+os.makedirs(PHOTO_DIR, exist_ok=True)
+
+THUMB_DIR = "thumbs"
+os.makedirs(THUMB_DIR, exist_ok=True)
+
 # ==== 写真フォルダと出力先 ====
 PHOTO_DIR = "photos"
 OUTPUT_HTML = "index.html"
