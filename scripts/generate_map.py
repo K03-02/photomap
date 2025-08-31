@@ -50,7 +50,9 @@ def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            pil_img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            pil_img = Image.frombytes(
+                heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
+            )
         else:
             pil_img = Image.open(io.BytesIO(file_bytes))
         return pil_img
@@ -116,7 +118,7 @@ def heic_to_base64_popup(file_bytes, width=200):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== キャッシュ読み込み（ローカル or GitHub）=====
+# ===== キャッシュ読み込み =====
 def load_cache():
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, 'r') as f:
@@ -150,13 +152,13 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ保存（ローカル）
+# キャッシュ保存
 with open(CACHE_FILE, 'w') as f:
     json.dump(cached_files, f)
 
 df = pd.DataFrame(rows)
 
-# ===== Leaflet で HTML 生成（Google Maps API 不使用）=====
+# ===== Leaflet HTML生成（ズーム連動アイコンサイズ対応）=====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -177,30 +179,37 @@ for _, row in df.iterrows():
         popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var lat = {row['latitude']};
-var lon = {row['longitude']};
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
-var marker = L.marker([lat, lon], {{icon: icon}}).addTo(map);
+var iconDiv = document.createElement('div');
+iconDiv.style.width = '50px';
+iconDiv.style.height = '50px';
+iconDiv.style.borderRadius = '50%';
+iconDiv.style.backgroundImage = 'url({icon_data_uri})';
+iconDiv.style.backgroundSize = 'cover';
+
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{
+    icon: L.divIcon({{className:'photo-marker', html: iconDiv.outerHTML}}),
+    riseOnHover: true
+}}).addTo(map);
 markers.push(marker);
-bounds.extend([lat, lon]);
+bounds.extend([{row['latitude']},{row['longitude']}]);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
 
-# ズーム連動（アイコンサイズ可変）＆ 全マーカーにフィット
-html_lines.append("""
-if (!bounds.isEmpty()) { map.fitBounds(bounds.pad(0.2)); }
+# 全マーカーにフィット
+html_lines.append("if (!bounds.isEmpty()) { map.fitBounds(bounds.pad(0.2)); }")
 
+# ズーム連動
+html_lines.append("""
 map.on('zoomend', function(){
     var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2);
-    markers.forEach(function(m){
+    var scale = Math.min(zoom/5, 1.2); // 最大 60px
+    document.querySelectorAll('.photo-marker div').forEach(function(div){
         var size = 50 * scale;
-        if(size>60) size = 60;
-        var icon = m.options.icon;
-        var newIcon = L.icon({iconUrl: icon.options.iconUrl, iconSize: [size, size]});
-        m.setIcon(newIcon);
+        if(size>60){ size=60; }
+        div.style.width = size + 'px';
+        div.style.height = size + 'px';
     });
 });
 """)
@@ -208,7 +217,7 @@ map.on('zoomend', function(){
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
-# ===== GitHub へ HTML / キャッシュ をアップロード =====
+# ===== GitHub へ HTML / キャッシュアップロード =====
 def upsert_file(path, content, message):
     try:
         c = repo.get_contents(path, ref=BRANCH_NAME)
@@ -218,7 +227,6 @@ def upsert_file(path, content, message):
         repo.create_file(path, message, content, branch=BRANCH_NAME)
         print(f"Created: {path}")
 
-upsert_file(HTML_NAME, html_str, "update HTML (Leaflet)")
+upsert_file(HTML_NAME, html_str, "update HTML (Leaflet zoom icons)")
 upsert_file(CACHE_FILE, json.dumps(cached_files), "update cache")
 print("✅ Done.")
-
