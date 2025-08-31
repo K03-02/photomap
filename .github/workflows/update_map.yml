@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # GitHub Secret に保存した base64 エンコード済みサービスアカウントJSON
       SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
 
     steps:
@@ -36,3 +35,11 @@ jobs:
       run: python scripts/generate_map.py
       env:
         SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
+
+    - name: Deploy map.html to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v6
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./map.html
+        # もし thumbs フォルダも必要なら下記のように変更
+        # publish_dir: ./  （map.html と thumbs/ を含める）
