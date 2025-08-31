@@ -8,154 +8,123 @@ import exifread
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
-from github import Github
 
-# ===== 設定 =====
-SERVICE_ACCOUNT_B64 = os.environ["SERVICE_ACCOUNT_B64"]  # GitHub Secret
-FOLDER_ID = os.environ["DRIVE_FOLDER_ID"]
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
-GITHUB_REPO = os.environ["GITHUB_REPOSITORY"]
-OUTPUT_HTML = "index.html"
-
+# 環境変数からサービスアカウント情報を取得
+SERVICE_ACCOUNT_B64 = os.environ["SERVICE_ACCOUNT_B64"]
+SERVICE_ACCOUNT_INFO = json.loads(base64.b64decode(SERVICE_ACCOUNT_B64))
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
-# ===== Google Drive サービス作成 =====
-service_account_info = json.loads(base64.b64decode(SERVICE_ACCOUNT_B64))
-creds = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=SCOPES
-)
-drive_service = build("drive", "v3", credentials=creds)
+def get_drive_service():
+    creds = service_account.Credentials.from_service_account_info(
+        SERVICE_ACCOUNT_INFO, scopes=SCOPES
+    )
+    service = build('drive', 'v3', credentials=creds)
+    return service
 
-# ===== 画像取得 =====
 def list_photos():
-    results = drive_service.files().list(
-        q=f"'{FOLDER_ID}' in parents and (mimeType contains 'image/')",
-        fields="files(id, name, mimeType)"
+    service = get_drive_service()
+    results = service.files().list(
+        q="mimeType contains 'image/'",
+        pageSize=100,
+        fields="files(id, name)"
     ).execute()
-    return results.get("files", [])
+    return results.get('files', [])
 
-def download_file(file_id):
+def download_file(file_id, file_name):
+    service = get_drive_service()
+    request = service.files().get_media(fileId=file_id)
     fh = io.BytesIO()
-    request = drive_service.files().get_media(fileId=file_id)
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
-        _, done = downloader.next_chunk()
+        status, done = downloader.next_chunk()
     fh.seek(0)
-    return fh.read()
+    with open(file_name, 'wb') as f:
+        f.write(fh.read())
+    return file_name
 
-# ===== 画像処理 =====
-def heic_to_pil(file_bytes):
-    heif_file = pyheif.read_heif(file_bytes)
-    return Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
-
-def open_image(file_bytes, mime_type):
+def create_thumbnail(file_path, thumb_path, size=(128,128)):
     try:
-        if "heic" in mime_type.lower():
-            return heic_to_pil(file_bytes)
+        if file_path.lower().endswith(".heic"):
+            heif_file = pyheif.read(file_path)
+            image = Image.frombytes(
+                heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
+            )
         else:
-            return Image.open(io.BytesIO(file_bytes))
-    except Exception:
+            image = Image.open(file_path)
+        image.thumbnail(size)
+        image.save(thumb_path)
+        return thumb_path
+    except UnidentifiedImageError:
+        print(f"Cannot open {file_path}")
         return None
 
-def make_thumbnail_circle(image, size=(50,50)):
-    im = image.copy()
-    im.thumbnail(size)
-    mask = Image.new("L", im.size, 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,im.size[0],im.size[1]), fill=255)
-    result = Image.new("RGBA", im.size)
-    result.paste(im, (0,0), mask)
-    return result
-
-def to_base64(image, fmt="PNG"):
-    buf = io.BytesIO()
-    image.save(buf, format=fmt)
-    return base64.b64encode(buf.getvalue()).decode()
-
-# ===== EXIFからGPS =====
-def get_lat_lon(file_bytes):
+def extract_gps(file_path):
+    with open(file_path, 'rb') as f:
+        tags = exifread.process_file(f, details=False)
     try:
-        tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
-        gps_lat = tags["GPS GPSLatitude"]
-        gps_lat_ref = tags["GPS GPSLatitudeRef"].printable
-        gps_lon = tags["GPS GPSLongitude"]
-        gps_lon_ref = tags["GPS GPSLongitudeRef"].printable
-
-        def to_deg(dms):
-            d,m,s = [float(x.num)/float(x.den) for x in dms.values]
-            return d + m/60 + s/3600
-
-        lat = to_deg(gps_lat)
-        if gps_lat_ref != "N": lat = -lat
-        lon = to_deg(gps_lon)
-        if gps_lon_ref != "E": lon = -lon
+        gps_lat = tags['GPS GPSLatitude'].values
+        gps_lat_ref = tags['GPS GPSLatitudeRef'].values
+        gps_lon = tags['GPS GPSLongitude'].values
+        gps_lon_ref = tags['GPS GPSLongitudeRef'].values
+        lat = float(gps_lat[0].num) / gps_lat[0].den + \
+              float(gps_lat[1].num) / gps_lat[1].den / 60 + \
+              float(gps_lat[2].num) / gps_lat[2].den / 3600
+        if gps_lat_ref != "N":
+            lat = -lat
+        lon = float(gps_lon[0].num) / gps_lon[0].den + \
+              float(gps_lon[1].num) / gps_lon[1].den / 60 + \
+              float(gps_lon[2].num) / gps_lon[2].den / 3600
+        if gps_lon_ref != "E":
+            lon = -lon
         return lat, lon
-    except:
+    except KeyError:
         return None, None
 
-# ===== HTML生成 =====
-def generate_html(photo_data):
-    markers_js = ""
-    for lat, lon, thumb_b64, full_b64 in photo_data:
-        map_link = f"https://www.google.com/maps?q={lat},{lon}"
-        markers_js += f"""
-        var icon = L.icon({{
-            iconUrl: 'data:image/png;base64,{thumb_b64}',
-            iconSize: [50, 50],
-            className: 'circle-icon'
-        }});
-        L.marker([{lat},{lon}], {{icon: icon}})
-            .addTo(map)
-            .bindPopup("<img src='data:image/jpeg;base64,{full_b64}' style='max-width:300px;'><br><a href='{map_link}' target='_blank'>📍 Googleマップで見る</a>");
-        """
-    return f"""<!DOCTYPE html>
-<html><head><meta charset='utf-8'><title>Photo Map</title>
-<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
-<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
-<style>.circle-icon {{ border-radius: 50%; }}</style>
-</head><body>
-<div id='map' style='height:100vh;'></div>
+def generate_map_html(photo_list, output_file="map.html"):
+    html_content = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Photo Map</title>
+<style>
+  #map {{ height: 100vh; width: 100%; }}
+</style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+</head>
+<body>
+<div id="map"></div>
 <script>
-var map = L.map('map').setView([35,135], 5);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{maxZoom:19}}).addTo(map);
-{markers_js}
-</script></body></html>
+var map = L.map('map').setView([0,0], 2);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 """
+    for photo in photo_list:
+        lat, lon = photo['gps']
+        if lat is not None:
+            html_content += f"""
+L.marker([{lat},{lon}]).addTo(map).bindPopup('<img src="{photo['thumb']}" width="128"/>');
+"""
+    html_content += "</script></body></html>"
 
-# ===== メイン =====
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    print(f"Map saved to {output_file}")
+
 def main():
-    files = list_photos()
+    photos = list_photos()
     photo_data = []
-    for f in files:
-        print(f"Processing {f['name']}...")
-        file_bytes = download_file(f["id"])
-        lat, lon = get_lat_lon(file_bytes)
-        if lat is None or lon is None:
-            print(f"⚠️ GPSなし: {f['name']}")
-            continue
-        image = open_image(file_bytes, f["mimeType"])
-        if not image:
-            print(f"⚠️ 画像開けない: {f['name']}")
-            continue
-        thumb = make_thumbnail_circle(image)
-        thumb_b64 = to_base64(thumb)
-        full_b64 = to_base64(image, fmt="JPEG")
-        photo_data.append((lat, lon, thumb_b64, full_b64))
+    os.makedirs("thumbs", exist_ok=True)
+    for p in photos:
+        file_path = download_file(p['id'], p['name'])
+        thumb_path = f"thumbs/{p['name']}.png"
+        create_thumbnail(file_path, thumb_path)
+        lat, lon = extract_gps(file_path)
+        photo_data.append({'thumb': thumb_path, 'gps': (lat, lon)})
 
-    html = generate_html(photo_data)
-    with open(OUTPUT_HTML, "w", encoding="utf-8") as f:
-        f.write(html)
-    print("✅ HTML生成完了")
-
-    # GitHub Pages アップロード
-    gh = Github(GITHUB_TOKEN)
-    repo = gh.get_repo(GITHUB_REPO)
-    try:
-        contents = repo.get_contents(OUTPUT_HTML)
-        repo.update_file(contents.path, "Update map", html, contents.sha)
-    except Exception:
-        repo.create_file(OUTPUT_HTML, "Create map", html)
+    generate_map_html(photo_data)
 
 if __name__ == "__main__":
     main()
+
