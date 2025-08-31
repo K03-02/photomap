@@ -1,17 +1,21 @@
-name: Generate Photo Map
+name: Generate Photo Map with Cache
 
 on:
-  push:
-    branches:
-      - main
+  schedule:
+    - cron: "*/5 * * * *"  # 5分ごとに実行
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
+      FOLDER_ID: ${{ secrets.FOLDER_ID }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
       SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
+      HTML_NAME: "index.html"
+      BRANCH_NAME: "main"
+      CACHE_FILE: "photomap_cache.json"
 
     steps:
     - name: Checkout repository
@@ -25,19 +29,15 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install Pillow pyheif exifread google-api-python-client google-auth PyGithub
-
-    - name: Decode service account JSON
-      run: |
-        echo "$SERVICE_ACCOUNT_B64" | base64 --decode > sa.json
+        pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub pandas
 
     - name: Run generate_map.py
       run: python scripts/generate_map.py
-      env:
-        SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
 
-    - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v4
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./
+    - name: Commit updated cache and HTML
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add ${{ env.CACHE_FILE }} ${{ env.HTML_NAME }}
+        git commit -m "Update HTML and cache [skip ci]" || echo "No changes to commit"
+        git push origin ${{ env.BRANCH_NAME }}
