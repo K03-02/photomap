@@ -1,34 +1,41 @@
-name: Photo Map Update
+name: PhotoMap Update
 
+# 5分ごとに実行（cronはUTC）
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5分ごとに実行
-  workflow_dispatch:       # 手動実行も可能
+    - cron: "*/5 * * * *"  # 5分ごと
+  workflow_dispatch:        # 手動実行も可能
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # GitHub Pages 更新のため
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # リポジトリをチェックアウト
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      # Pythonセットアップ
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install google-api-python-client google-auth pyheif exifread Pillow PyGithub
+      # 依存ライブラリをインストール
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 Pillow pyheif exifread PyGithub
 
-    - name: Generate Photo Map
-      run: python scripts/generate_map.py
-      env:
-        SERVICE_ACCOUNT_FILE: ${{ secrets.SERVICE_ACCOUNT_FILE }}
-        DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
+      # 環境変数を設定
+      - name: Set environment variables
+        run: |
+          echo "SERVICE_ACCOUNT_JSON=${{ secrets.SERVICE_ACCOUNT_JSON }}" >> $GITHUB_ENV
+          echo "DRIVE_FOLDER_ID=${{ secrets.DRIVE_FOLDER_ID }}" >> $GITHUB_ENV
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "GITHUB_REPOSITORY=${{ github.repository }}" >> $GITHUB_ENV
+
+      # スクリプト実行
+      - name: Run generate_map.py
+        run: |
+          python scripts/generate_map.py
