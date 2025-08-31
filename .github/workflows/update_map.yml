@@ -1,8 +1,8 @@
-name: Update Photo Map
+name: Photo Map Update
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # 5分ごと
+    - cron: "*/5 * * * *"  # 5分ごとに実行
   workflow_dispatch:
 
 jobs:
@@ -12,25 +12,33 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      # Pythonセットアップ
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
+      # 必要なパッケージインストール
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install pillow pyheif exifread google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib PyGithub
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-auth pyheif exifread Pillow PyGithub
 
+      # Base64で保存したサービスアカウントを復号
       - name: Decode service account
-        run: |
-          echo "${{ secrets.SERVICE_ACCOUNT_B64 }}" | base64 --decode > /tmp/service_account.json
-
-      - name: Run generate_map.py
         env:
-          SERVICE_ACCOUNT_FILE: /tmp/service_account.json
-          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
         run: |
-          python scripts/generate_map.py
+          echo "$SERVICE_ACCOUNT_B64" | tr -d '\r' | base64 --decode > sa.json
+
+      # Drive Folder ID と GitHub Token 環境変数設定
+      - name: Set environment variables
+        run: |
+          echo "DRIVE_FOLDER_ID=${{ secrets.DRIVE_FOLDER_ID }}" >> $GITHUB_ENV
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "GITHUB_REPOSITORY=${{ github.repository }}" >> $GITHUB_ENV
+
+      # Map生成スクリプト実行
+      - name: Generate Photo Map
+        run: python scripts/generate_map.py
+
