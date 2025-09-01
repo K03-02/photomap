@@ -4,61 +4,68 @@
 <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
 <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>
 <div id='map'></div><script>
-var map = L.map('map').setView([35.0,138.0],5);
+var map = L.map('map').setView([35.0, 138.0], 5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-var markers = []; var bounds = L.latLngBounds();
+var markers = [];
+var bounds = L.latLngBounds();
 
-var icon = L.icon({iconUrl:'None',iconSize:[50,50]});
+var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
 var marker = L.marker([34.573433333333334,135.4879],{icon:icon}).addTo(map);
 markers.push(marker);
 bounds.extend([34.573433333333334,135.4879]);
 marker.bindPopup("<b>IMG_3901.HEIC</b><br>2025:09:01 17:30:40<br>"
-+"<a href='https://www.google.com/maps/search/?api=1&query=34.573433333333334,135.4879' target='_blank'>Google Mapsで開く</a><br>"
-+"<img src='None' width='200'/>");
++ "<a href='https://www.google.com/maps/search/?api=1&query=34.573433333333334,135.4879' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='None' width='200'/>");
 
 
-var icon = L.icon({iconUrl:'None',iconSize:[50,50]});
+var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
 var marker = L.marker([34.57340555555556,135.4879611111111],{icon:icon}).addTo(map);
 markers.push(marker);
 bounds.extend([34.57340555555556,135.4879611111111]);
 marker.bindPopup("<b>IMG_3617.HEIC</b><br>2025:09:01 12:51:21<br>"
-+"<a href='https://www.google.com/maps/search/?api=1&query=34.57340555555556,135.4879611111111' target='_blank'>Google Mapsで開く</a><br>"
-+"<img src='None' width='200'/>");
++ "<a href='https://www.google.com/maps/search/?api=1&query=34.57340555555556,135.4879611111111' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='None' width='200'/>");
 
 
-var icon = L.icon({iconUrl:'None',iconSize:[50,50]});
+var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
 var marker = L.marker([35.64897222222222,139.78918333333334],{icon:icon}).addTo(map);
 markers.push(marker);
 bounds.extend([35.64897222222222,139.78918333333334]);
 marker.bindPopup("<b>IMG_3440.HEIC</b><br>2025:08:13 13:03:54<br>"
-+"<a href='https://www.google.com/maps/search/?api=1&query=35.64897222222222,139.78918333333334' target='_blank'>Google Mapsで開く</a><br>"
-+"<img src='None' width='200'/>");
++ "<a href='https://www.google.com/maps/search/?api=1&query=35.64897222222222,139.78918333333334' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='None' width='200'/>");
 
 
-var icon = L.icon({iconUrl:'None',iconSize:[50,50]});
+var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
 var marker = L.marker([34.90168055555555,138.92558333333332],{icon:icon}).addTo(map);
 markers.push(marker);
 bounds.extend([34.90168055555555,138.92558333333332]);
 marker.bindPopup("<b>IMG_3484.HEIC</b><br>2025:08:15 14:53:13<br>"
-+"<a href='https://www.google.com/maps/search/?api=1&query=34.90168055555555,138.92558333333332' target='_blank'>Google Mapsで開く</a><br>"
-+"<img src='None' width='200'/>");
++ "<a href='https://www.google.com/maps/search/?api=1&query=34.90168055555555,138.92558333333332' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='None' width='200'/>");
 
 
-var icon = L.icon({iconUrl:'None',iconSize:[50,50]});
+var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
 var marker = L.marker([35.01961388888889,138.89616388888888],{icon:icon}).addTo(map);
 markers.push(marker);
 bounds.extend([35.01961388888889,138.89616388888888]);
 marker.bindPopup("<b>IMG_3509.HEIC</b><br>2025:08:16 10:28:01<br>"
-+"<a href='https://www.google.com/maps/search/?api=1&query=35.01961388888889,138.89616388888888' target='_blank'>Google Mapsで開く</a><br>"
-+"<img src='None' width='200'/>");
++ "<a href='https://www.google.com/maps/search/?api=1&query=35.01961388888889,138.89616388888888' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='None' width='200'/>");
 
 
 if(!bounds.isEmpty()){map.fitBounds(bounds.pad(0.2));}
 map.on('zoomend',function(){
-    var zoom=map.getZoom(); var scale=Math.min(zoom/5,1.2);
+    var zoom = map.getZoom();
+    var scale = Math.min(zoom/5,1.2);
     markers.forEach(function(m){
-        var img=m.getElement().querySelector('img');
-        if(img){var size=50*scale;if(size>60){size=60;} img.style.width=size+'px'; img.style.height=size+'px';}
+        var img = m.getElement().querySelector('img');
+        if(img){
+            var size = 50*scale;
+            if(size>60) size=60;
+            img.style.width = size+'px';
+            img.style.height = size+'px';
+        }
     });
 });
 
