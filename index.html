@@ -31,7 +31,7 @@ map.on('zoomend', function(){
         var img = m.getElement().querySelector('img');
         if(img){
             var size = 50 * scale;
-            if(size>60) size=60;
+            if(size>60){ size=60; }
             img.style.width = size + 'px';
             img.style.height = size + 'px';
         }
