@@ -1,18 +1,22 @@
+import os
+import io
+import json
+import base64
+import pandas as pd
+from PIL import Image, ImageDraw, UnidentifiedImageError
+import pyheif
+import exifread
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import pandas as pd
-from PIL import Image, ImageDraw
-import pyheif, exifread, io, os, base64
 from github import Github
-import json
 
 # ===== 設定 =====
-FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')  # 環境変数に変更
-REPO_NAME = 'K03-02/photomap'
+FOLDER_ID = os.environ.get('DRIVE_FOLDER_ID')
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
+REPO_NAME = os.environ.get('REPO_NAME', 'K03-02/photomap')
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
-CACHE_FILE = 'photomap_cache.json'  # ローカル/Driveに保存
+CACHE_FILE = 'photomap_cache.json'
 
 # ===== Drive API =====
 drive_service = build('drive', 'v3')
@@ -35,18 +39,11 @@ def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            pil_img = Image.frombytes(
-                heif_file.mode,
-                heif_file.size,
-                heif_file.data,
-                "raw",
-                heif_file.mode
-            )
+            pil_img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
         else:
             pil_img = Image.open(io.BytesIO(file_bytes))
         return pil_img
-    except Exception as e:
-        print(f"⚠️ Cannot open image: {e}")
+    except UnidentifiedImageError:
         return None
 
 def extract_exif(file_bytes, mime_type):
@@ -54,9 +51,9 @@ def extract_exif(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
             fbytes = io.BytesIO()
-            image.save(fbytes, format='JPEG')
+            img.save(fbytes, format='JPEG')
             fbytes.seek(0)
             tags = exifread.process_file(fbytes, details=False)
         else:
@@ -79,8 +76,7 @@ def extract_exif(file_bytes, mime_type):
         pass
     return lat, lon, dt
 
-def heic_to_base64_circle(file_bytes, size=50):
-    img = pil_open_safe(file_bytes, 'image/heic')
+def image_to_base64_circle(img, size=50):
     if img is None:
         return None
     img = img.resize((size, size))
@@ -92,8 +88,7 @@ def heic_to_base64_circle(file_bytes, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def heic_to_base64_popup(file_bytes, width=200):
-    img = pil_open_safe(file_bytes, 'image/heic')
+def image_to_base64_popup(img, width=200):
     if img is None:
         return None
     w, h = img.size
@@ -103,14 +98,13 @@ def heic_to_base64_popup(file_bytes, width=200):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== キャッシュ読み込み =====
+# ===== キャッシュ =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE, 'r') as f:
         cached_files = json.load(f)
 else:
     cached_files = {}
 
-# ===== 画像情報収集（追加分だけ処理） =====
 rows = []
 for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
@@ -131,19 +125,13 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-    if lat and lon:
-        icon_data_uri = heic_to_base64_circle(file_bytes)
-        popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
-        if not icon_data_uri or not popup_data_uri:
-            print(f"⚠️ Skip {f['name']} (cannot convert HEIC)")
-
 # キャッシュ保存
 with open(CACHE_FILE, 'w') as f:
     json.dump(cached_files, f)
 
 df = pd.DataFrame(rows)
 
-# ===== HTML作成 =====
+# ===== HTML 作成 =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -153,27 +141,25 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];"
+    "var markers = [];",
 ]
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes)
-        popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
+        img = pil_open_safe(file_bytes, row['mime_type'])
+        icon_data_uri = image_to_base64_circle(img)
+        popup_data_uri = image_to_base64_popup(img)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
-        else:
-            print(f"⚠️ Skip {row['filename']} (cannot convert HEIC)")
 
-# ===== ズーム連動 =====
 html_lines.append("""
 map.on('zoomend', function(){
     var zoom = map.getZoom();
@@ -193,7 +179,7 @@ map.on('zoomend', function(){
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
-# ===== GitHub へアップロード =====
+# ===== GitHub アップロード =====
 g = Github(GITHUB_TOKEN)
 repo = g.get_repo(REPO_NAME)
 
@@ -204,3 +190,4 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
