@@ -1,17 +1,14 @@
-import os
-import io
-import json
-import base64
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os, io, json, base64
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFile
+from PIL import Image, ImageDraw, UnidentifiedImageError
 import pyheif, exifread
-from github import Github
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
-
-# ===== Pillow 設定（破損JPEGも読み込み） =====
-ImageFile.LOAD_TRUNCATED_IMAGES = True
+from github import Github
 
 # ===== 環境変数 =====
 FOLDER_ID = os.environ["FOLDER_ID"]
@@ -32,13 +29,13 @@ drive_service = build('drive', 'v3', credentials=creds)
 gh = Github(GITHUB_TOKEN)
 repo = gh.get_repo(REPO_NAME)
 
-# ===== Drive ファイル一覧 =====
+# ===== Drive ファイル一覧取得 =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
-    results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
+    results = drive_service.files().list(q=query, fields="files(id,name,mimeType)").execute()
     return results.get('files', [])
 
-# ===== Drive ファイルバイト取得 =====
+# ===== Drive ファイル取得 =====
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
@@ -48,22 +45,26 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-# ===== PIL で画像オープン（HEIC/JPEG両対応） =====
+# ===== PIL で安全に開く（HEIC / JPG / PNG 対応） =====
 def pil_open_safe(file_bytes, mime_type):
+    mime_type = mime_type.lower()
     try:
-        if 'heic' in mime_type.lower():
+        if 'heic' in mime_type or 'avif' in mime_type:
             heif_file = pyheif.read_heif(file_bytes)
-            return Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            pil_img = Image.frombytes(
+                heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
+            )
+        elif 'jpeg' in mime_type or 'jpg' in mime_type or 'png' in mime_type:
+            pil_img = Image.open(io.BytesIO(file_bytes)).convert("RGBA")
         else:
-            img = Image.open(io.BytesIO(file_bytes))
-            img.verify()
-            img = Image.open(io.BytesIO(file_bytes))
-            return img
+            print(f"⚠️ Unknown MIME type: {mime_type}")
+            return None
+        return pil_img
     except Exception as e:
         print(f"⚠️ Cannot open IMAGE: {e}")
         return None
 
-# ===== EXIF 抽出（GPS, 撮影日時） =====
+# ===== EXIF 抽出（GPS / 撮影日時） =====
 def extract_exif(file_bytes, mime_type):
     lat, lon, dt = '', '', ''
     try:
@@ -80,9 +81,9 @@ def extract_exif(file_bytes, mime_type):
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
-                minute = float(dms.values[1].num)/dms.values[1].den
+                min = float(dms.values[1].num)/dms.values[1].den
                 sec = float(dms.values[2].num)/dms.values[2].den
-                dd = deg + minute/60 + sec/3600
+                dd = deg + min/60 + sec/3600
                 if ref.values not in ['N','E']:
                     dd = -dd
                 return dd
@@ -94,7 +95,7 @@ def extract_exif(file_bytes, mime_type):
         pass
     return lat, lon, dt
 
-# ===== サムネイル生成（円形） =====
+# ===== サムネ / ポップアップ画像作成 =====
 def image_to_base64_circle(file_bytes, mime_type, size=50):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None:
@@ -103,13 +104,11 @@ def image_to_base64_circle(file_bytes, mime_type, size=50):
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
     draw.ellipse((0,0,size,size), fill=255)
-    img = img.convert("RGBA")
     img.putalpha(mask)
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== ポップアップ用画像生成 =====
 def image_to_base64_popup(file_bytes, mime_type, width=200):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None:
@@ -128,17 +127,24 @@ if os.path.exists(CACHE_FILE):
 else:
     cached_files = {}
 
-# ===== 画像処理 =====
+# ===== 画像情報収集 =====
 rows = []
 for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
-        print(f"File {f['name']} status: {cached_files[f['id']]['status']}")
+        print(f"File {f['name']} status: cached")
         continue
 
     print(f"Processing {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
+    status = 'success' if lat and lon else 'no_gps'
+
+    icon_data_uri = image_to_base64_circle(file_bytes, f['mimeType'])
+    popup_data_uri = image_to_base64_popup(file_bytes, f['mimeType'])
+    if not icon_data_uri or not popup_data_uri:
+        status = 'failed_image'
+        print(f"⚠️ Failed conversion: {f['name']}")
 
     row = {
         'filename': f['name'],
@@ -147,22 +153,15 @@ for f in list_image_files(FOLDER_ID):
         'datetime': dt,
         'file_id': f['id'],
         'mime_type': f['mimeType'],
-        'status': 'success' if lat and lon else 'no_gps'
+        'status': status
     }
-
-    # 画像変換チェック
-    icon_data_uri = image_to_base64_circle(file_bytes, f['mimeType'])
-    popup_data_uri = image_to_base64_popup(file_bytes, f['mimeType'])
-    if icon_data_uri is None or popup_data_uri is None:
-        row['status'] = 'failed'
-
     rows.append(row)
     cached_files[f['id']] = row
-    print(f"File {f['name']} status: {row['status']}")
+    print(f"File {f['name']} status: {status}")
 
 # キャッシュ保存
 with open(CACHE_FILE, 'w') as f:
-    json.dump(cached_files, f, indent=2)
+    json.dump(cached_files, f)
 
 df = pd.DataFrame(rows)
 
@@ -176,8 +175,7 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];",
-    "var bounds = L.latLngBounds();"
+    "var markers = [];"
 ]
 
 for _, row in df.iterrows():
@@ -186,30 +184,34 @@ for _, row in df.iterrows():
     file_bytes = get_file_bytes(row['file_id'])
     icon_data_uri = image_to_base64_circle(file_bytes, row['mime_type'])
     popup_data_uri = image_to_base64_popup(file_bytes, row['mime_type'])
+    if not icon_data_uri or not popup_data_uri:
+        continue
     html_lines.append(f"""
 var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
-bounds.extend([{row['latitude']},{row['longitude']}]);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
 
 html_lines.append("""
-if (!bounds.isEmpty()) {
+if (markers.length>0){ 
+    var bounds = L.latLngBounds();
+    markers.forEach(m=>bounds.extend(m.getLatLng()));
     map.fitBounds(bounds.pad(0.2));
 }
+
 map.on('zoomend', function(){
     var zoom = map.getZoom();
     var scale = Math.min(zoom/5, 1.2);
     markers.forEach(function(m){
         var img = m.getElement().querySelector('img');
         if(img){
-            var size = 50 * scale;
+            var size = 50*scale;
             if(size>60){ size=60; }
-            img.style.width = size + 'px';
-            img.style.height = size + 'px';
+            img.style.width = size+'px';
+            img.style.height = size+'px';
         }
     });
 });
@@ -218,12 +220,16 @@ map.on('zoomend', function(){
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
-# ===== GitHub へアップロード =====
-try:
-    contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML", html_str, contents.sha, branch=BRANCH_NAME)
-    print("HTML updated on GitHub.")
-except:
-    repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
-    print("HTML created on GitHub.")
+# ===== GitHub にアップロード =====
+def upsert_file(path, content, message):
+    try:
+        c = repo.get_contents(path, ref=BRANCH_NAME)
+        repo.update_file(path, message, content, c.sha, branch=BRANCH_NAME)
+        print(f"Updated: {path}")
+    except Exception:
+        repo.create_file(path, message, content, branch=BRANCH_NAME)
+        print(f"Created: {path}")
 
+upsert_file(HTML_NAME, html_str, "update HTML (Leaflet)")
+upsert_file(CACHE_FILE, json.dumps(cached_files), "update cache")
+print("✅ Done.")
