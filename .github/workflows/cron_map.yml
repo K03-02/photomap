@@ -1,30 +1,38 @@
 name: Generate Photo Map
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *'  # 毎日 6:00 JST に実行
 
 jobs:
-  build:
+  generate-map:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Setup Python
+      # 1. リポジトリをチェックアウト
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      # 2. Python セットアップ
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: 3.11
+
+      # 3. 必要パッケージをインストール
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub pandas
-      - name: Run map generator
-        env:
-          FOLDER_ID: ${{ secrets.FOLDER_ID }}
-          SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO_NAME: ${{ github.repository }}
-          HTML_NAME: index.html
-          BRANCH_NAME: main
-          CACHE_FILE: photomap_cache.json
+
+      # 4. 環境変数（Secrets）を設定
+      - name: Set environment variables
+        run: echo "FOLDER_ID=${{ secrets.FOLDER_ID }}" >> $GITHUB_ENV
+      - run: echo "SERVICE_ACCOUNT_B64=${{ secrets.SERVICE_ACCOUNT_B64 }}" >> $GITHUB_ENV
+      - run: echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+      - run: echo "REPO_NAME=${{ secrets.REPO_NAME }}" >> $GITHUB_ENV
+
+      # 5. スクリプトを実行
+      - name: Generate map
         run: python scripts/generate_map.py
