@@ -1,22 +1,18 @@
 name: Generate Photo Map
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *' # 毎日 2:00
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
       SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
