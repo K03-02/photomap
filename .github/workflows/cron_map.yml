@@ -39,7 +39,7 @@ jobs:
           from PIL import Image, UnidentifiedImageError
           import base64
 
-          test_path = "tests/sample.heic"
+          test_path = "sample.heic"
 
           try:
               # そのまま読み込み
