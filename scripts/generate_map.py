@@ -50,6 +50,7 @@ def pil_open_safe(file_bytes, mime_type):
         else:
             return Image.open(io.BytesIO(file_bytes))
     except Exception as e:
+        print(f"⚠️ Cannot open IMAGE: {e}")
         return None
 
 # ===== EXIF抽出 =====
@@ -128,10 +129,8 @@ for f in list_image_files(FOLDER_ID):
 
     if img is None:
         status = 'failed'
-        print(f"⚠️ Cannot open IMAGE: {f['name']}")
     elif not lat or not lon:
         status = 'no_gps'
-        print(f"⚠️ No GPS info: {f['name']}")
     else:
         status = 'success'
 
