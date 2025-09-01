@@ -216,6 +216,9 @@ def main():
 
     print("✅ HTML uploaded to GitHub Pages")
 
+for fn in os.listdir(PHOTO_DIR):
+    print("📷 Found file:", fn)
+
 
 if __name__ == "__main__":
     main()
