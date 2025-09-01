@@ -1,40 +1,66 @@
 name: Generate Photo Map
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-  schedule:
-    - cron: '0 3 * * *'  # 毎日 3:00 に実行（必要なければ削除）
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # リポジトリをチェックアウト
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      # HEIC 処理に必要なシステムライブラリをインストール
-      - name: Install HEIC dependencies
+      # HEIC 対応ライブラリをインストール
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libheif1 libheif-dev libde265-0 libde265-dev
+          sudo apt-get install -y libheif-examples libheif-dev libde265-dev
 
-      # Python セットアップ
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
-      # Python パッケージをインストール
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install pillow pyheif exifread PyGithub google-api-python-client google-auth-httplib2 google-auth-oauthlib pandas
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib \
+                      pillow pyheif exifread PyGithub pandas requests
 
-      # スクリプト実行
-      - name: Run map generation
+      # HEIC が GitHub Actions 上で読めるか確認するテスト
+      - name: Test HEIC support
         run: |
-          python scripts/generate_map.py
+          python - <<'EOF'
+          import pyheif
+          from PIL import Image
+          import io, requests
+
+          url = "https://github.com/nokiatech/heif_conformance/raw/master/avif-testFiles/Chimera-AV1-8bit.heic"
+          data = requests.get(url).content
+          heif_file = pyheif.read_heif(io.BytesIO(data))
+          image = Image.frombytes(
+              heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
+          )
+          print("✅ HEIC読み込み成功:", image.size)
+          EOF
+
+      # サービスアカウントキーを復号してファイルに保存
+      - name: Decode service account key
+        run: |
+          echo "$SERVICE_ACCOUNT_B64" | base64 -d > service_account.json
         env:
           SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run generate_map.py
+        run: python scripts/generate_map.py
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./output
+
