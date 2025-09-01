@@ -47,32 +47,37 @@ def get_file_bytes(file_id):
 
 # ===== PIL オープン（HEIC/JPEG対応）=====
 def pil_open_safe(file_bytes, mime_type):
+    # まず PIL で試す
     try:
-        if 'heic' in mime_type.lower():
+        pil_img = Image.open(io.BytesIO(file_bytes))
+        pil_img.load()
+        return pil_img
+    except Exception:
+        # PIL でダメなら pyheif を試す
+        try:
             heif_file = pyheif.read_heif(file_bytes)
             pil_img = Image.frombytes(
                 heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
             )
-        else:
-            pil_img = Image.open(io.BytesIO(file_bytes))
-        return pil_img
-    except Exception as e:
-        print(f"⚠️ Cannot open image: {e}")
-        return None
+            return pil_img
+        except Exception as e:
+            print(f"⚠️ Cannot open image: {e}")
+            return None
 
 # ===== EXIF（GPS, 撮影日時）抽出 =====
 def extract_exif(file_bytes, mime_type):
     lat, lon, dt = '', '', ''
     try:
-        if 'heic' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
-            fbytes = io.BytesIO()
-            image.save(fbytes, format='JPEG')
-            fbytes.seek(0)
-            tags = exifread.process_file(fbytes, details=False)
-        else:
-            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
+        # PIL で開く
+        img = pil_open_safe(file_bytes, mime_type)
+        if img is None:
+            return lat, lon, dt
+
+        # JPEG 変換して exifread で読み込む
+        fbytes = io.BytesIO()
+        img.save(fbytes, format='JPEG')
+        fbytes.seek(0)
+        tags = exifread.process_file(fbytes, details=False)
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -91,7 +96,7 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF parse error: {e}")
     return lat, lon, dt
 
-# ===== HEIC → 円形サムネ（データURI）=====
+# ===== サムネイル/ポップアップ生成 =====
 def heic_to_base64_circle(file_bytes, size=50):
     img = pil_open_safe(file_bytes, 'image/heic')
     if img is None:
@@ -106,7 +111,6 @@ def heic_to_base64_circle(file_bytes, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== HEIC → ポップアップ画像（データURI）=====
 def heic_to_base64_popup(file_bytes, width=200):
     img = pil_open_safe(file_bytes, 'image/heic')
     if img is None:
