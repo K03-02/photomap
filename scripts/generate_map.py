@@ -1,10 +1,3 @@
-# Colab 初回のみ
-!pip install --quiet google-api-python-client google-auth-httplib2 google-auth-oauthlib pillow pyheif exifread PyGithub pandas
-
-from google.colab import auth, drive
-auth.authenticate_user()
-drive.mount('/content/drive')
-
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import pandas as pd
@@ -15,15 +8,11 @@ import json
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')  # 環境変数に変更
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
-CACHE_FILE = '/content/drive/MyDrive/photomap_cache.json'  # Drive に保存
-
-# GitHub トークンは環境変数から取得
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
-if not GITHUB_TOKEN:
-    raise ValueError("GITHUB_TOKEN が環境変数に設定されていません。")
+CACHE_FILE = 'photomap_cache.json'  # ローカル/Driveに保存
 
 # ===== Drive API =====
 drive_service = build('drive', 'v3')
@@ -57,7 +46,7 @@ def pil_open_safe(file_bytes, mime_type):
             pil_img = Image.open(io.BytesIO(file_bytes))
         return pil_img
     except Exception as e:
-        print(f"⚠️ Cannot open IMAGE: {e}")
+        print(f"⚠️ Cannot open image: {e}")
         return None
 
 def extract_exif(file_bytes, mime_type):
@@ -90,7 +79,10 @@ def extract_exif(file_bytes, mime_type):
         pass
     return lat, lon, dt
 
-def image_to_base64_circle(img, size=50):
+def heic_to_base64_circle(file_bytes, size=50):
+    img = pil_open_safe(file_bytes, 'image/heic')
+    if img is None:
+        return None
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
@@ -100,7 +92,10 @@ def image_to_base64_circle(img, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def image_to_base64_popup(img, width=200):
+def heic_to_base64_popup(file_bytes, width=200):
+    img = pil_open_safe(file_bytes, 'image/heic')
+    if img is None:
+        return None
     w, h = img.size
     new_h = int(h * (width / w))
     img = img.resize((width, new_h))
@@ -131,15 +126,16 @@ for f in list_image_files(FOLDER_ID):
         'longitude': lon,
         'datetime': dt,
         'file_id': f['id'],
-        'mime_type': f['mimeType'],
-        'status': 'success' if lat and lon else 'no_gps'
+        'mime_type': f['mimeType']
     }
-
-    img = pil_open_safe(file_bytes, f['mimeType'])
-    if not img:
-        row['status'] = 'failed_open'
-    cached_files[f['id']] = row
     rows.append(row)
+    cached_files[f['id']] = row
+
+    if lat and lon:
+        icon_data_uri = heic_to_base64_circle(file_bytes)
+        popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
+        if not icon_data_uri or not popup_data_uri:
+            print(f"⚠️ Skip {f['name']} (cannot convert HEIC)")
 
 # キャッシュ保存
 with open(CACHE_FILE, 'w') as f:
@@ -157,26 +153,25 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];",
+    "var markers = [];"
 ]
 
 for _, row in df.iterrows():
-    if row['status'] != 'success':
-        continue
-    file_bytes = get_file_bytes(row['file_id'])
-    img = pil_open_safe(file_bytes, row['mime_type'])
-    if not img:
-        continue
-    icon_data_uri = image_to_base64_circle(img)
-    popup_data_uri = image_to_base64_popup(img)
-    html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
+    if row['latitude'] and row['longitude']:
+        file_bytes = get_file_bytes(row['file_id'])
+        icon_data_uri = heic_to_base64_circle(file_bytes)
+        popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
+        if icon_data_uri and popup_data_uri:
+            html_lines.append(f"""
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
+        else:
+            print(f"⚠️ Skip {row['filename']} (cannot convert HEIC)")
 
 # ===== ズーム連動 =====
 html_lines.append("""
@@ -194,6 +189,7 @@ map.on('zoomend', function(){
     });
 });
 """)
+
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
@@ -208,6 +204,3 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
-print("✅ Done.")
-
