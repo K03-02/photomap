@@ -3,7 +3,7 @@ import io
 import json
 import base64
 import pandas as pd
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, UnidentifiedImageError
 import pyheif
 import exifread
 from github import Github
@@ -20,7 +20,9 @@ CACHE_FILE = 'photomap_cache.json'  # リポジトリ直下に保存
 
 # ===== Google Drive API 認証 =====
 service_account_info = json.loads(base64.b64decode(os.environ['SERVICE_ACCOUNT_B64']))
-credentials = service_account.Credentials.from_service_account_info(service_account_info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+credentials = service_account.Credentials.from_service_account_info(
+    service_account_info, scopes=["https://www.googleapis.com/auth/drive.readonly"]
+)
 drive_service = build('drive', 'v3', credentials=credentials)
 
 # ===== 関数 =====
@@ -38,29 +40,38 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-def pil_open_safe(file_bytes, mime_type):
+def pil_open_safe(file_bytes, mime_type="", filename=""):
+    """
+    安全に画像を開く関数。HEIC判定はMIMEと先頭バイトで。
+    """
     try:
-        if 'heic' in mime_type.lower():
+        mime = mime_type.lower() if mime_type else ""
+        is_heic_mime = 'heic' in mime or 'heif' in mime
+        is_heic_bytes = any(x in file_bytes[:512].lower() for x in [b'ftypheic', b'ftypheix', b'ftyphevc', b'ftyphevx'])
+
+        if is_heic_mime or is_heic_bytes:
             heif_file = pyheif.read_heif(file_bytes)
             return Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
         else:
             return Image.open(io.BytesIO(file_bytes))
+    except UnidentifiedImageError:
+        print(f"⚠️ Cannot open image (UnidentifiedImageError): {filename}")
+    except ValueError as e:
+        print(f"⚠️ Cannot open image (ValueError): {filename} -> {e}")
     except Exception as e:
-        print(f"⚠️ Cannot open image: {e}")
-        return None
+        print(f"⚠️ Cannot open image (Other): {filename} -> {e}")
+    return None
 
 def extract_exif(file_bytes, mime_type):
     lat, lon, dt = '', '', ''
     try:
-        if 'heic' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
-            fbytes = io.BytesIO()
-            img.save(fbytes, format='JPEG')
-            fbytes.seek(0)
-            tags = exifread.process_file(fbytes, details=False)
-        else:
-            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
+        img = pil_open_safe(file_bytes, mime_type)
+        if img is None:
+            return lat, lon, dt
+        fbytes = io.BytesIO()
+        img.save(fbytes, format='JPEG')
+        fbytes.seek(0)
+        tags = exifread.process_file(fbytes, details=False)
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -119,7 +130,8 @@ for f in list_image_files(FOLDER_ID):
     print(f"Processing {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-    row = {'filename': f['name'], 'latitude': lat, 'longitude': lon, 'datetime': dt, 'file_id': f['id'], 'mime_type': f['mimeType']}
+    row = {'filename': f['name'], 'latitude': lat, 'longitude': lon, 'datetime': dt,
+           'file_id': f['id'], 'mime_type': f['mimeType']}
     rows.append(row)
     cached_files[f['id']] = row
 
@@ -149,13 +161,12 @@ for _, row in df.iterrows():
         popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
-var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
-markers.push(marker);
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map); 
+markers.push(marker); 
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}' width='200'/>");
-""")
++ "<img src='{popup_data_uri}' width='200'/>");""")
 
 html_lines.append("""
 map.on('zoomend', function(){
