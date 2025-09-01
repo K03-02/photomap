@@ -37,16 +37,15 @@ jobs:
           python - <<'EOF'
           import pyheif
           from PIL import Image
-          import io, requests
 
-          url = "https://github.com/nokiatech/heif_conformance/raw/master/avif-testFiles/Chimera-AV1-8bit.heic"
-          data = requests.get(url).content
-          heif_file = pyheif.read_heif(io.BytesIO(data))
+          path = "tests/sample.heic"
+          heif_file = pyheif.read(path)
           image = Image.frombytes(
               heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
           )
           print("✅ HEIC読み込み成功:", image.size)
           EOF
+
 
       # サービスアカウントキーを復号してファイルに保存
       - name: Decode service account key
