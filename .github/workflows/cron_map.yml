@@ -53,15 +53,16 @@ jobs:
               print("❌ HEIC エラー:", e)
           EOF
 
-      # サービスアカウントキーを環境変数にセット
-      - name: Set SERVICE_ACCOUNT_B64
-        run: echo "SERVICE_ACCOUNT_B64 is set"
+      # サービスアカウントキーを復号してファイルに保存
+      - name: Decode service account key
+        run: echo "$SERVICE_ACCOUNT_B64" | base64 -d > service_account.json
         env:
           SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
 
       - name: Run generate_map.py
         env:
           SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/generate_map.py
 
       - name: Deploy to GitHub Pages
@@ -69,5 +70,6 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./output
+
 
 
