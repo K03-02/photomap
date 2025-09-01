@@ -1,29 +1,25 @@
-import base64
-import io
-import os
-import json
+import os, io, base64, json
 from PIL import Image, ImageDraw
-import pyheif
-import exifread
+import pyheif, exifread
 import pandas as pd
-from github import Github
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2 import service_account
+from github import Github
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
-CACHE_FILE = '/tmp/photomap_cache.json'
+CACHE_FILE = 'photomap_cache.json'
 
 # ===== Google Drive 認証 =====
 service_account_info = json.loads(base64.b64decode(os.environ['SERVICE_ACCOUNT_B64']))
 credentials = service_account.Credentials.from_service_account_info(service_account_info)
 drive_service = build('drive', 'v3', credentials=credentials)
 
-# ===== 画像取得・EXIF =====
+# ===== 画像取得関数 =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
     results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
@@ -35,7 +31,7 @@ def get_file_bytes(file_id):
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
-        status, done = downloader.next_chunk()
+        _, done = downloader.next_chunk()
     return fh.getvalue()
 
 def pil_open_safe(file_bytes, mime_type):
@@ -79,10 +75,7 @@ def extract_exif(file_bytes, mime_type):
         pass
     return lat, lon, dt
 
-def heic_to_base64_circle(file_bytes, mime_type, size=50):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None:
-        return None
+def image_to_base64_circle(img, size=50):
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
@@ -92,10 +85,7 @@ def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def heic_to_base64_popup(file_bytes, mime_type, width=200):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None:
-        return None
+def image_to_base64_popup(img, width=200):
     w, h = img.size
     new_h = int(h * (width / w))
     img = img.resize((width, new_h))
@@ -120,14 +110,8 @@ for f in list_image_files(FOLDER_ID):
     print(f"Processing {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-    row = {
-        'filename': f['name'],
-        'latitude': lat,
-        'longitude': lon,
-        'datetime': dt,
-        'file_id': f['id'],
-        'mime_type': f['mimeType']
-    }
+    row = {'filename': f['name'], 'latitude': lat, 'longitude': lon,
+           'datetime': dt, 'file_id': f['id'], 'mime_type': f['mimeType']}
     rows.append(row)
     cached_files[f['id']] = row
 
@@ -137,7 +121,7 @@ with open(CACHE_FILE, 'w') as f:
 
 df = pd.DataFrame(rows)
 
-# ===== HTML 作成 =====
+# ===== HTML作成 =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -147,15 +131,15 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];",
-]
+    "var markers = [];"]
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
-        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
-        if icon_data_uri and popup_data_uri:
+        img = pil_open_safe(file_bytes, row['mime_type'])
+        if img:
+            icon_data_uri = image_to_base64_circle(img)
+            popup_data_uri = image_to_base64_popup(img)
             html_lines.append(f"""
 var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
@@ -164,7 +148,10 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
+        else:
+            print(f"⚠️ Skip {row['filename']} (cannot open image)")
 
+# ===== ズーム連動 =====
 html_lines.append("""
 map.on('zoomend', function(){
     var zoom = map.getZoom();
@@ -180,13 +167,13 @@ map.on('zoomend', function(){
     });
 });
 """)
-
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
 # ===== GitHub へアップロード =====
 g = Github(os.environ['GITHUB_TOKEN'])
 repo = g.get_repo(REPO_NAME)
+
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
     repo.update_file(HTML_NAME, "update HTML", html_str, contents.sha, branch=BRANCH_NAME)
@@ -194,4 +181,3 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
