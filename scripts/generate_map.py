@@ -4,13 +4,14 @@ import json
 import base64
 import pandas as pd
 from PIL import Image, ImageDraw
-import pyheif, exifread
+import pillow_heif  # ← HEIC対応
+import exifread
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2 import service_account
 from github import Github
 
-# ===== 環境変数（Secrets から） =====
+# ===== 環境変数 =====
 FOLDER_ID = os.environ["FOLDER_ID"]
 SERVICE_ACCOUNT_B64 = os.environ["SERVICE_ACCOUNT_B64"]
 GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
@@ -25,7 +26,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 creds = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 
-# ===== GitHub クライアント =====
+# ===== GitHub =====
 gh = Github(GITHUB_TOKEN)
 repo = gh.get_repo(REPO_NAME)
 
@@ -45,14 +46,12 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-# ===== PIL オープン（HEIC/JPEG対応）=====
+# ===== PIL 統一オープン（JPEG/HEIC） =====
 def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            pil_img = Image.frombytes(
-                heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
-            )
+            img = pillow_heif.read_heif(file_bytes, convert_to="RGB")
+            pil_img = Image.frombytes(img.mode, img.size, img.data)
         else:
             pil_img = Image.open(io.BytesIO(file_bytes))
         return pil_img
@@ -60,19 +59,18 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-# ===== EXIF（GPS, 撮影日時）抽出 =====
+# ===== EXIF抽出 =====
 def extract_exif(file_bytes, mime_type):
     lat, lon, dt = '', '', ''
     try:
-        if 'heic' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
-            fbytes = io.BytesIO()
-            image.save(fbytes, format='JPEG')
-            fbytes.seek(0)
-            tags = exifread.process_file(fbytes, details=False)
-        else:
-            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
+        pil_img = pil_open_safe(file_bytes, mime_type)
+        if pil_img is None:
+            return lat, lon, dt
+
+        fbytes = io.BytesIO()
+        pil_img.save(fbytes, format='JPEG')
+        fbytes.seek(0)
+        tags = exifread.process_file(fbytes, details=False)
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -91,9 +89,9 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF parse error: {e}")
     return lat, lon, dt
 
-# ===== HEIC → 円形サムネ（データURI）=====
-def heic_to_base64_circle(file_bytes, size=50):
-    img = pil_open_safe(file_bytes, 'image/heic')
+# ===== 円形サムネ & ポップアップ =====
+def image_to_base64_circle(file_bytes, mime_type, size=50):
+    img = pil_open_safe(file_bytes, mime_type)
     if img is None:
         return None
     img = img.resize((size, size))
@@ -106,9 +104,8 @@ def heic_to_base64_circle(file_bytes, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== HEIC → ポップアップ画像（データURI）=====
-def heic_to_base64_popup(file_bytes, width=200):
-    img = pil_open_safe(file_bytes, 'image/heic')
+def image_to_base64_popup(file_bytes, mime_type, width=200):
+    img = pil_open_safe(file_bytes, mime_type)
     if img is None:
         return None
     w, h = img.size
@@ -118,10 +115,10 @@ def heic_to_base64_popup(file_bytes, width=200):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== キャッシュ読み込み =====
+# ===== キャッシュ =====
 def load_cache():
     if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, 'r') as f:
+        with open(CACHE_FILE,'r') as f:
             return json.load(f)
     try:
         c = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
@@ -131,27 +128,19 @@ def load_cache():
 
 cached_files = load_cache()
 
-# ===== 画像収集（差分のみ処理）=====
+# ===== 画像収集 =====
+loaded_images = []
+failed_images = []
 rows = []
-loaded_files = []
-failed_files = []
 
 for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
-        loaded_files.append(f['name'])
+        loaded_images.append(f['name'])
         continue
 
     print(f"Processing {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
-
-    # 画像が開けるかチェック
-    img = pil_open_safe(file_bytes, f['mimeType'])
-    if img is None:
-        failed_files.append(f['name'])
-        print(f"⚠️ Failed to load: {f['name']}")
-        continue
-
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
     row = {
         'filename': f['name'],
@@ -161,95 +150,84 @@ for f in list_image_files(FOLDER_ID):
         'file_id': f['id'],
         'mime_type': f['mimeType']
     }
-    rows.append(row)
-    cached_files[f['id']] = row
-    loaded_files.append(f['name'])
-
-# ===== 処理結果の表示 =====
-print("\n✅ Loaded images:")
-for name in loaded_files:
-    print(" -", name)
-
-if failed_files:
-    print("\n⚠️ Failed to load images:")
-    for name in failed_files:
-        print(" -", name)
+    pil_img = pil_open_safe(file_bytes, f['mimeType'])
+    if pil_img:
+        loaded_images.append(f['name'])
+        rows.append(row)
+        cached_files[f['id']] = row
+    else:
+        failed_images.append(f['name'])
 
 # キャッシュ保存
-with open(CACHE_FILE, 'w') as f:
+with open(CACHE_FILE,'w') as f:
     json.dump(cached_files, f)
 
 df = pd.DataFrame(rows)
 
-# ===== Leaflet HTML生成（ズーム連動アイコンサイズ対応）=====
+# ===== Leaflet HTML生成 =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
-    "<style>#map { height: 100vh; width: 100%; }</style>",
+    "<style>#map{height:100vh;width:100%;}</style>",
     "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>",
     "<div id='map'></div><script>",
-    "var map = L.map('map').setView([35.0, 138.0], 5);",
-    "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];",
-    "var bounds = L.latLngBounds();"
+    "var map=L.map('map').setView([35.0,138.0],5);",
+    "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);",
+    "var markers=[]; var bounds=L.latLngBounds();"
 ]
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes)
-        popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
-        if icon_data_uri and popup_data_uri:
+        icon_uri = image_to_base64_circle(file_bytes, row['mime_type'])
+        popup_uri = image_to_base64_popup(file_bytes, row['mime_type'])
+        if icon_uri and popup_uri:
             html_lines.append(f"""
-var iconDiv = document.createElement('div');
-iconDiv.style.width = '50px';
-iconDiv.style.height = '50px';
-iconDiv.style.borderRadius = '50%';
-iconDiv.style.backgroundImage = 'url({icon_data_uri})';
-iconDiv.style.backgroundSize = 'cover';
-
-var marker = L.marker([{row['latitude']},{row['longitude']}], {{
-    icon: L.divIcon({{className:'photo-marker', html: iconDiv.outerHTML}}),
-    riseOnHover: true
-}}).addTo(map);
+var icon=L.icon({{iconUrl:'{icon_uri}',iconSize:[50,50]}});
+var marker=L.marker([{row['latitude']},{row['longitude']}],{{icon:icon}}).addTo(map);
 markers.push(marker);
 bounds.extend([{row['latitude']},{row['longitude']}]);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}' width='200'/>");
++"<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
++"<img src='{popup_uri}' width='200'/>");
 """)
 
-# 全マーカーにフィット
-html_lines.append("if (!bounds.isEmpty()) { map.fitBounds(bounds.pad(0.2)); }")
-
-# ズーム連動
 html_lines.append("""
-map.on('zoomend', function(){
-    var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2); // 最大 60px
-    document.querySelectorAll('.photo-marker div').forEach(function(div){
-        var size = 50 * scale;
-        if(size>60){ size=60; }
-        div.style.width = size + 'px';
-        div.style.height = size + 'px';
-    });
+if(!bounds.isEmpty()){map.fitBounds(bounds.pad(0.2));}
+map.on('zoomend',function(){
+  var zoom=map.getZoom();
+  var scale=Math.min(zoom/5,1.2);
+  markers.forEach(function(m){
+    var img=m.getElement().querySelector('img');
+    if(img){var size=50*scale;if(size>60){size=60;}img.style.width=size+'px';img.style.height=size+'px';}
+  });
 });
 """)
+html_lines+=["</script></body></html>"]
+html_str="\n".join(html_lines)
 
-html_lines += ["</script></body></html>"]
-html_str = "\n".join(html_lines)
-
-# ===== GitHub へ HTML / キャッシュアップロード =====
+# ===== GitHub アップロード =====
 def upsert_file(path, content, message):
     try:
-        c = repo.get_contents(path, ref=BRANCH_NAME)
-        repo.update_file(path, message, content, c.sha, branch=BRANCH_NAME)
+        c=repo.get_contents(path,ref=BRANCH_NAME)
+        repo.update_file(path,message,content,c.sha,branch=BRANCH_NAME)
         print(f"Updated: {path}")
     except Exception:
-        repo.create_file(path, message, content, branch=BRANCH_NAME)
+        repo.create_file(path,message,content,branch=BRANCH_NAME)
         print(f"Created: {path}")
 
-upsert_file(HTML_NAME, html_str, "update HTML (Leaflet zoom icons with loaded image log)")
-upsert_file(CACHE_FILE, json.dumps(cached_files), "update cache")
+upsert_file(HTML_NAME,html_str,"update HTML (Leaflet)")
+upsert_file(CACHE_FILE,json.dumps(cached_files),"update cache")
+
+# ===== 読み込めた/失敗画像ログ出力 =====
+print("✅ Loaded images:")
+for n in loaded_images:
+    print(" -", n)
+if failed_images:
+    print("\n⚠️ Failed to load images:")
+    for n in failed_images:
+        print(" -", n)
+
 print("✅ Done.")
+
