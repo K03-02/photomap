@@ -1,25 +1,26 @@
-import os
-import io
-import json
-import base64
+# scripts/generate_map.py
+
+import os, io, json, base64
 import pandas as pd
 from PIL import Image, ImageDraw, UnidentifiedImageError
-import pyheif
-import exifread
+import pyheif, exifread
+from github import Github
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from github import Github
 
 # ===== 設定 =====
-FOLDER_ID = os.environ.get('DRIVE_FOLDER_ID')
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
-REPO_NAME = os.environ.get('REPO_NAME', 'K03-02/photomap')
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
-CACHE_FILE = 'photomap_cache.json'
+CACHE_FILE = '/tmp/photomap_cache.json'  # GitHub Actions 用に /tmp
+REPO_NAME = 'K03-02/photomap'
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
+SERVICE_ACCOUNT_PATH = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
 
 # ===== Drive API =====
-drive_service = build('drive', 'v3')
+credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_PATH)
+drive_service = build('drive', 'v3', credentials=credentials)
 
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
@@ -32,17 +33,16 @@ def get_file_bytes(file_id):
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
-        status, done = downloader.next_chunk()
+        _, done = downloader.next_chunk()
     return fh.getvalue()
 
 def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            pil_img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            return Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
         else:
-            pil_img = Image.open(io.BytesIO(file_bytes))
-        return pil_img
+            return Image.open(io.BytesIO(file_bytes))
     except UnidentifiedImageError:
         return None
 
@@ -52,19 +52,19 @@ def extract_exif(file_bytes, mime_type):
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
             img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
-            fbytes = io.BytesIO()
-            img.save(fbytes, format='JPEG')
-            fbytes.seek(0)
-            tags = exifread.process_file(fbytes, details=False)
+            fbuf = io.BytesIO()
+            img.save(fbuf, format='JPEG')
+            fbuf.seek(0)
+            tags = exifread.process_file(fbuf, details=False)
         else:
             tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
-                min = float(dms.values[1].num)/dms.values[1].den
+                minute = float(dms.values[1].num)/dms.values[1].den
                 sec = float(dms.values[2].num)/dms.values[2].den
-                dd = deg + min/60 + sec/3600
+                dd = deg + minute/60 + sec/3600
                 if ref.values not in ['N','E']:
                     dd = -dd
                 return dd
@@ -77,8 +77,6 @@ def extract_exif(file_bytes, mime_type):
     return lat, lon, dt
 
 def image_to_base64_circle(img, size=50):
-    if img is None:
-        return None
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
@@ -89,8 +87,6 @@ def image_to_base64_circle(img, size=50):
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 def image_to_base64_popup(img, width=200):
-    if img is None:
-        return None
     w, h = img.size
     new_h = int(h * (width / w))
     img = img.resize((width, new_h))
@@ -98,17 +94,19 @@ def image_to_base64_popup(img, width=200):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== キャッシュ =====
+# ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE, 'r') as f:
         cached_files = json.load(f)
 else:
     cached_files = {}
 
+# ===== 画像処理 =====
 rows = []
 for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
+        print(f"File {f['name']} status: cached")
         continue
 
     print(f"Processing {f['name']}...")
@@ -120,12 +118,18 @@ for f in list_image_files(FOLDER_ID):
         'longitude': lon,
         'datetime': dt,
         'file_id': f['id'],
-        'mime_type': f['mimeType']
+        'mime_type': f['mimeType'],
+        'status': 'success' if lat and lon else 'no_gps'
     }
+
+    img = pil_open_safe(file_bytes, f['mimeType'])
+    if img is None:
+        row['status'] = 'failed_image'
+        print(f"⚠️ Cannot open IMAGE: {f['name']}")
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ保存
+# ===== キャッシュ保存 =====
 with open(CACHE_FILE, 'w') as f:
     json.dump(cached_files, f)
 
@@ -145,13 +149,15 @@ html_lines = [
 ]
 
 for _, row in df.iterrows():
-    if row['latitude'] and row['longitude']:
-        file_bytes = get_file_bytes(row['file_id'])
-        img = pil_open_safe(file_bytes, row['mime_type'])
-        icon_data_uri = image_to_base64_circle(img)
-        popup_data_uri = image_to_base64_popup(img)
-        if icon_data_uri and popup_data_uri:
-            html_lines.append(f"""
+    if row['status'] != 'success':
+        continue
+    file_bytes = get_file_bytes(row['file_id'])
+    img = pil_open_safe(file_bytes, row['mime_type'])
+    if img is None:
+        continue
+    icon_data_uri = image_to_base64_circle(img)
+    popup_data_uri = image_to_base64_popup(img)
+    html_lines.append(f"""
 var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
@@ -160,6 +166,7 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
 
+# ===== ズーム連動 =====
 html_lines.append("""
 map.on('zoomend', function(){
     var zoom = map.getZoom();
@@ -168,21 +175,19 @@ map.on('zoomend', function(){
         var img = m.getElement().querySelector('img');
         if(img){
             var size = 50 * scale;
-            if(size>60){ size=60; }
+            if(size>60) size=60;
             img.style.width = size + 'px';
             img.style.height = size + 'px';
         }
     });
 });
 """)
-
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
 # ===== GitHub アップロード =====
 g = Github(GITHUB_TOKEN)
 repo = g.get_repo(REPO_NAME)
-
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
     repo.update_file(HTML_NAME, "update HTML", html_str, contents.sha, branch=BRANCH_NAME)
@@ -190,4 +195,7 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
+print("✅ Done.")
+
 
