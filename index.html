@@ -1,67 +1,52 @@
-<!DOCTYPE html>
-<html><head><meta charset='utf-8'><title>Photo Map</title>
-<style>#map { height: 100vh; width: 100%; }</style>
-<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
-<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>
-<div id='map'></div><script>
-var map = L.map('map').setView([35.0, 138.0], 5);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-var markers = [];
-var bounds = L.latLngBounds();
+name: Generate Photo Map (Leaflet)
 
-var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
-var marker = L.marker([34.573433333333334,135.4879],{icon:icon}).addTo(map);
-markers.push(marker);
-bounds.extend([34.573433333333334,135.4879]);
-marker.bindPopup("<b>IMG_3901.HEIC</b><br>2025:09:01 17:30:40<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query=34.573433333333334,135.4879' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='None' width='200'/>");
+on:
+  # 定期実行する場合はコメント解除
+  # schedule:
+  #   - cron: "0 * * * *"   # 毎時
+  workflow_dispatch:
 
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # PyGithubでindex.htmlやキャッシュを更新するため
 
-var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
-var marker = L.marker([34.57340555555556,135.4879611111111],{icon:icon}).addTo(map);
-markers.push(marker);
-bounds.extend([34.57340555555556,135.4879611111111]);
-marker.bindPopup("<b>IMG_3617.HEIC</b><br>2025:09:01 12:51:21<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query=34.57340555555556,135.4879611111111' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='None' width='200'/>");
+    env:
+      # === Secrets ===
+      FOLDER_ID: ${{ secrets.FOLDER_ID }}
+      SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # PATでも可
+      REPO_NAME: ${{ secrets.REPO_NAME }}         # 例: K03-02/photomap
+      HTML_NAME: index.html
+      BRANCH_NAME: main
+      CACHE_FILE: photomap_cache.json
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH_NAME }}
 
-var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
-var marker = L.marker([35.64897222222222,139.78918333333334],{icon:icon}).addTo(map);
-markers.push(marker);
-bounds.extend([35.64897222222222,139.78918333333334]);
-marker.bindPopup("<b>IMG_3440.HEIC</b><br>2025:08:13 13:03:54<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query=35.64897222222222,139.78918333333334' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='None' width='200'/>");
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            google-api-python-client \
+            google-auth-httplib2 \
+            google-auth-oauthlib \
+            pillow \
+            pillow_heif \
+            pyheif \
+            exifread \
+            PyGithub \
+            pandas \
+            folium
 
-var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
-var marker = L.marker([34.90168055555555,138.92558333333332],{icon:icon}).addTo(map);
-markers.push(marker);
-bounds.extend([34.90168055555555,138.92558333333332]);
-marker.bindPopup("<b>IMG_3484.HEIC</b><br>2025:08:15 14:53:13<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query=34.90168055555555,138.92558333333332' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='None' width='200'/>");
-
-
-var icon = L.icon({iconUrl:'None', iconSize:[50,50]});
-var marker = L.marker([35.01961388888889,138.89616388888888],{icon:icon}).addTo(map);
-markers.push(marker);
-bounds.extend([35.01961388888889,138.89616388888888]);
-marker.bindPopup("<b>IMG_3509.HEIC</b><br>2025:08:16 10:28:01<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query=35.01961388888889,138.89616388888888' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='None' width='200'/>");
-
-
-if(!bounds.isEmpty()){map.fitBounds(bounds.pad(0.2));}
-map.on('zoomend', function(){
-    var zoom = map.getZoom();
-    var scale = Math.min(zoom/5,1.2);
-    markers.forEach(function(m){
-        var img = m.getElement().querySelector('img');
-        if(img){var size=50*scale;if(size>60){size=60;} img.style.width=size+'px'; img.style.height=size+'px';}
-    });
-});
-
-</script></body></html>
+      - name: Run generator
+        run: python scripts/generate_map.py
