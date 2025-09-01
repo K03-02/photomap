@@ -7,23 +7,19 @@
 var map = L.map('map').setView([35.0, 138.0], 5);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);
 var markers = [];
+var bounds = L.latLngBounds();
 
-if (markers.length>0){ 
-    var bounds = L.latLngBounds();
-    markers.forEach(m=>bounds.extend(m.getLatLng()));
-    map.fitBounds(bounds.pad(0.2));
-}
-
+if (!bounds.isEmpty()) { map.fitBounds(bounds.pad(0.2)); }
 map.on('zoomend', function(){
     var zoom = map.getZoom();
     var scale = Math.min(zoom/5, 1.2);
     markers.forEach(function(m){
         var img = m.getElement().querySelector('img');
         if(img){
-            var size = 50*scale;
+            var size = 50 * scale;
             if(size>60){ size=60; }
-            img.style.width = size+'px';
-            img.style.height = size+'px';
+            img.style.width = size + 'px';
+            img.style.height = size + 'px';
         }
     });
 });
