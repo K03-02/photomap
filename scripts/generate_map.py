@@ -11,10 +11,10 @@ from google.oauth2 import service_account
 from github import Github
 
 # ===== 環境変数（Secrets から） =====
-FOLDER_ID = os.environ["FOLDER_ID"]                      # 例: 'xxxxxxxxxxxxxxxxxxxxxxxx'
-SERVICE_ACCOUNT_B64 = os.environ["SERVICE_ACCOUNT_B64"]  # サービスアカウントJSONのbase64
-GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]                # PAT or GITHUB_TOKEN
-REPO_NAME = os.environ["REPO_NAME"]                      # 例: 'K03-02/photomap'
+FOLDER_ID = os.environ["FOLDER_ID"]
+SERVICE_ACCOUNT_B64 = os.environ["SERVICE_ACCOUNT_B64"]
+GITHUB_TOKEN = os.environ["GITHUB_TOKEN"]
+REPO_NAME = os.environ["REPO_NAME"]
 HTML_NAME = os.environ.get("HTML_NAME", "index.html")
 BRANCH_NAME = os.environ.get("BRANCH_NAME", "main")
 CACHE_FILE = os.environ.get("CACHE_FILE", "photomap_cache.json")
@@ -42,7 +42,7 @@ def get_file_bytes(file_id):
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
-        _, done = downloader.next_chunk()
+        status, done = downloader.next_chunk()
     return fh.getvalue()
 
 # ===== PIL オープン（HEIC/JPEG対応）=====
@@ -51,7 +51,11 @@ def pil_open_safe(file_bytes, mime_type):
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
             pil_img = Image.frombytes(
-                heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
+                heif_file.mode,
+                heif_file.size,
+                heif_file.data,
+                "raw",
+                heif_file.mode
             )
         else:
             pil_img = Image.open(io.BytesIO(file_bytes))
@@ -77,18 +81,18 @@ def extract_exif(file_bytes, mime_type):
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
-                minute = float(dms.values[1].num)/dms.values[1].den
+                min = float(dms.values[1].num)/dms.values[1].den
                 sec = float(dms.values[2].num)/dms.values[2].den
-                dd = deg + minute/60 + sec/3600
-                if ref.values not in ['N', 'E']:
+                dd = deg + min/60 + sec/3600
+                if ref.values not in ['N','E']:
                     dd = -dd
                 return dd
             lat = dms_to_dd(tags['GPS GPSLatitude'], tags['GPS GPSLatitudeRef'])
             lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
-    except Exception as e:
-        print(f"⚠️ EXIF parse error: {e}")
+    except:
+        pass
     return lat, lon, dt
 
 # ===== HEIC → 円形サムネ（データURI）=====
@@ -100,7 +104,6 @@ def heic_to_base64_circle(file_bytes, size=50):
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
     draw.ellipse((0,0,size,size), fill=255)
-    img = img.convert("RGBA")
     img.putalpha(mask)
     buf = io.BytesIO()
     img.save(buf, format='PNG')
@@ -118,21 +121,14 @@ def heic_to_base64_popup(file_bytes, width=200):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== キャッシュ読み込み（ローカル or GitHub）=====
-def load_cache():
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, 'r') as f:
-            return json.load(f)
-    # リポジトリから取得（初回などローカルに無い場合）
-    try:
-        c = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
-        return json.loads(c.decoded_content.decode())
-    except Exception:
-        return {}
+# ===== キャッシュ読み込み =====
+if os.path.exists(CACHE_FILE):
+    with open(CACHE_FILE, 'r') as f:
+        cached_files = json.load(f)
+else:
+    cached_files = {}
 
-cached_files = load_cache()
-
-# ===== 画像収集（差分のみ処理）=====
+# ===== 画像情報収集 =====
 rows = []
 for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
@@ -153,13 +149,13 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ保存（ローカル）
+# キャッシュ保存
 with open(CACHE_FILE, 'w') as f:
     json.dump(cached_files, f)
 
 df = pd.DataFrame(rows)
 
-# ===== Leaflet で HTML 生成（Google Maps API 不使用）=====
+# ===== HTML生成 =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -169,8 +165,7 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];",
-    "var bounds = L.latLngBounds();"
+    "var markers = [];"
 ]
 
 for _, row in df.iterrows():
@@ -180,28 +175,26 @@ for _, row in df.iterrows():
         popup_data_uri = heic_to_base64_popup(file_bytes, width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
-var lat = {row['latitude']};
-var lon = {row['longitude']};
-var marker = L.marker([lat, lon], {{icon: icon}}).addTo(map);
-markers.push(marker);
-bounds.extend([lat, lon]);
-marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map); 
+markers.push(marker); 
+marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>" 
++ "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>" 
 + "<img src='{popup_data_uri}' width='200'/>");
 """)
+        else:
+            print(f"⚠️ Skip {row['filename']} (cannot convert HEIC)")
 
-# ズーム連動（アイコンサイズ可変）＆ 全マーカーにフィット
+# ズーム連動
 html_lines.append("""
-if (!bounds.isEmpty()) { map.fitBounds(bounds.pad(0.2)); }
-
 map.on('zoomend', function(){
     var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2);  // 最大 60px に制限
+    var scale = Math.min(zoom/5, 1.2);
     markers.forEach(function(m){
         var img = m.getElement().querySelector('img');
         if(img){
-            var size = 50 * scale; if(size>60){ size=60; }
+            var size = 50 * scale;
+            if(size>60){ size=60; }
             img.style.width = size + 'px';
             img.style.height = size + 'px';
         }
@@ -212,17 +205,11 @@ map.on('zoomend', function(){
 html_lines += ["</script></body></html>"]
 html_str = "\n".join(html_lines)
 
-# ===== GitHub へ HTML / キャッシュ をアップロード（API 経由）=====
-def upsert_file(path, content, message):
-    try:
-        c = repo.get_contents(path, ref=BRANCH_NAME)
-        repo.update_file(path, message, content, c.sha, branch=BRANCH_NAME)
-        print(f"Updated: {path}")
-    except Exception:
-        repo.create_file(path, message, content, branch=BRANCH_NAME)
-        print(f"Created: {path}")
-
-upsert_file(HTML_NAME, html_str, "update HTML (Leaflet)")
-upsert_file(CACHE_FILE, json.dumps(cached_files), "update cache")
-print("✅ Done.")
-
+# ===== GitHubアップロード =====
+try:
+    contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML", html_str, contents.sha, branch=BRANCH_NAME)
+    print("HTML updated on GitHub.")
+except:
+    repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
+    print("HTML created on GitHub.")
