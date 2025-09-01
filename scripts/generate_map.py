@@ -41,19 +41,19 @@ def get_file_bytes(file_id):
     return fh.getvalue()
 
 def pil_open_safe(file_bytes, mime_type="", filename=""):
-    """
-    安全に画像を開く関数。HEIC判定はMIMEと先頭バイトで。
-    """
     try:
         mime = mime_type.lower() if mime_type else ""
         is_heic_mime = 'heic' in mime or 'heif' in mime
         is_heic_bytes = any(x in file_bytes[:512].lower() for x in [b'ftypheic', b'ftypheix', b'ftyphevc', b'ftyphevx'])
-
         if is_heic_mime or is_heic_bytes:
             heif_file = pyheif.read_heif(file_bytes)
-            return Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            print(f"-> HEIC opened successfully: {filename}, size={img.size}")
+            return img
         else:
-            return Image.open(io.BytesIO(file_bytes))
+            img = Image.open(io.BytesIO(file_bytes))
+            print(f"-> Image opened successfully: {filename}, size={img.size}, mode={img.mode}")
+            return img
     except UnidentifiedImageError:
         print(f"⚠️ Cannot open image (UnidentifiedImageError): {filename}")
     except ValueError as e:
@@ -62,10 +62,10 @@ def pil_open_safe(file_bytes, mime_type="", filename=""):
         print(f"⚠️ Cannot open image (Other): {filename} -> {e}")
     return None
 
-def extract_exif(file_bytes, mime_type):
+def extract_exif(file_bytes, mime_type, filename=""):
     lat, lon, dt = '', '', ''
     try:
-        img = pil_open_safe(file_bytes, mime_type)
+        img = pil_open_safe(file_bytes, mime_type, filename)
         if img is None:
             return lat, lon, dt
         fbytes = io.BytesIO()
@@ -86,14 +86,16 @@ def extract_exif(file_bytes, mime_type):
             lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
-    except:
-        pass
+        print(f"-> EXIF extracted: {filename}, lat={lat}, lon={lon}, dt={dt}")
+    except Exception as e:
+        print(f"⚠️ EXIF extraction failed: {filename} -> {e}")
     return lat, lon, dt
 
-def heic_to_base64_circle(file_bytes, mime_type, size=50):
+def heic_to_base64_circle(file_bytes, mime_type):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None:
         return None
+    size = 50
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
@@ -124,16 +126,32 @@ else:
 # ===== 画像情報収集 =====
 rows = []
 for f in list_image_files(FOLDER_ID):
+    print(f"\n=== Processing file: {f['name']} ===")
+    print(f"File ID: {f['id']}, MIME type: {f['mimeType']}")
+
     if f['id'] in cached_files:
+        print("-> Cached, skipping download and EXIF extraction")
         rows.append(cached_files[f['id']])
         continue
-    print(f"Processing {f['name']}...")
-    file_bytes = get_file_bytes(f['id'])
-    lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-    row = {'filename': f['name'], 'latitude': lat, 'longitude': lon, 'datetime': dt,
-           'file_id': f['id'], 'mime_type': f['mimeType']}
-    rows.append(row)
-    cached_files[f['id']] = row
+
+    try:
+        file_bytes = get_file_bytes(f['id'])
+        print(f"-> Downloaded {len(file_bytes)} bytes")
+
+        lat, lon, dt = extract_exif(file_bytes, f['mimeType'], f['name'])
+
+        row = {
+            'filename': f['name'],
+            'latitude': lat,
+            'longitude': lon,
+            'datetime': dt,
+            'file_id': f['id'],
+            'mime_type': f['mimeType']
+        }
+        rows.append(row)
+        cached_files[f['id']] = row
+    except Exception as e:
+        print(f"⚠️ Unexpected error processing {f['name']}: {e}")
 
 # キャッシュ保存
 with open(CACHE_FILE, 'w') as f:
@@ -156,17 +174,20 @@ html_lines = [
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
-        file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
-        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
-        if icon_data_uri and popup_data_uri:
-            html_lines.append(f"""
+        try:
+            file_bytes = get_file_bytes(row['file_id'])
+            icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
+            popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
+            if icon_data_uri and popup_data_uri:
+                html_lines.append(f"""
 var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map); 
 markers.push(marker); 
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
 + "<img src='{popup_data_uri}' width='200'/>");""")
+        except Exception as e:
+            print(f"⚠️ Failed to generate marker for {row['filename']}: {e}")
 
 html_lines.append("""
 map.on('zoomend', function(){
@@ -195,6 +216,8 @@ try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
     repo.update_file(HTML_NAME, "update HTML", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
-except:
+except Exception as e:
+    print(f"⚠️ Could not update HTML: {e}")
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
