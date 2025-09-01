@@ -47,37 +47,32 @@ def get_file_bytes(file_id):
 
 # ===== PIL オープン（HEIC/JPEG対応）=====
 def pil_open_safe(file_bytes, mime_type):
-    # まず PIL で試す
     try:
-        pil_img = Image.open(io.BytesIO(file_bytes))
-        pil_img.load()
-        return pil_img
-    except Exception:
-        # PIL でダメなら pyheif を試す
-        try:
+        if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
             pil_img = Image.frombytes(
                 heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode
             )
-            return pil_img
-        except Exception as e:
-            print(f"⚠️ Cannot open image: {e}")
-            return None
+        else:
+            pil_img = Image.open(io.BytesIO(file_bytes))
+        return pil_img
+    except Exception as e:
+        print(f"⚠️ Cannot open image: {e}")
+        return None
 
 # ===== EXIF（GPS, 撮影日時）抽出 =====
 def extract_exif(file_bytes, mime_type):
     lat, lon, dt = '', '', ''
     try:
-        # PIL で開く
-        img = pil_open_safe(file_bytes, mime_type)
-        if img is None:
-            return lat, lon, dt
-
-        # JPEG 変換して exifread で読み込む
-        fbytes = io.BytesIO()
-        img.save(fbytes, format='JPEG')
-        fbytes.seek(0)
-        tags = exifread.process_file(fbytes, details=False)
+        if 'heic' in mime_type.lower():
+            heif_file = pyheif.read_heif(file_bytes)
+            image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            fbytes = io.BytesIO()
+            image.save(fbytes, format='JPEG')
+            fbytes.seek(0)
+            tags = exifread.process_file(fbytes, details=False)
+        else:
+            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -96,7 +91,7 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF parse error: {e}")
     return lat, lon, dt
 
-# ===== サムネイル/ポップアップ生成 =====
+# ===== HEIC → 円形サムネ（データURI）=====
 def heic_to_base64_circle(file_bytes, size=50):
     img = pil_open_safe(file_bytes, 'image/heic')
     if img is None:
@@ -111,6 +106,7 @@ def heic_to_base64_circle(file_bytes, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
+# ===== HEIC → ポップアップ画像（データURI）=====
 def heic_to_base64_popup(file_bytes, width=200):
     img = pil_open_safe(file_bytes, 'image/heic')
     if img is None:
@@ -137,13 +133,25 @@ cached_files = load_cache()
 
 # ===== 画像収集（差分のみ処理）=====
 rows = []
+loaded_files = []
+failed_files = []
+
 for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
+        loaded_files.append(f['name'])
         continue
 
     print(f"Processing {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
+
+    # 画像が開けるかチェック
+    img = pil_open_safe(file_bytes, f['mimeType'])
+    if img is None:
+        failed_files.append(f['name'])
+        print(f"⚠️ Failed to load: {f['name']}")
+        continue
+
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
     row = {
         'filename': f['name'],
@@ -155,6 +163,17 @@ for f in list_image_files(FOLDER_ID):
     }
     rows.append(row)
     cached_files[f['id']] = row
+    loaded_files.append(f['name'])
+
+# ===== 処理結果の表示 =====
+print("\n✅ Loaded images:")
+for name in loaded_files:
+    print(" -", name)
+
+if failed_files:
+    print("\n⚠️ Failed to load images:")
+    for name in failed_files:
+        print(" -", name)
 
 # キャッシュ保存
 with open(CACHE_FILE, 'w') as f:
@@ -231,6 +250,6 @@ def upsert_file(path, content, message):
         repo.create_file(path, message, content, branch=BRANCH_NAME)
         print(f"Created: {path}")
 
-upsert_file(HTML_NAME, html_str, "update HTML (Leaflet zoom icons)")
+upsert_file(HTML_NAME, html_str, "update HTML (Leaflet zoom icons with loaded image log)")
 upsert_file(CACHE_FILE, json.dumps(cached_files), "update cache")
 print("✅ Done.")
