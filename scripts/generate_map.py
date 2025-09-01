@@ -215,10 +215,11 @@ def main():
         repo.create_file(CACHE_FILE, "create cache", json.dumps(updated_cache), branch=BRANCH_NAME)
 
     print("✅ HTML uploaded to GitHub Pages")
-
-for fn in os.listdir(PHOTO_DIR):
-    print("📷 Found file:", fn)
-
+    
+files = list_image_files(FOLDER_ID)
+print("=== Drive 上の画像一覧 ===")
+for f in files:
+    print(f"ID: {f['id']}, Name: {f['name']}, MIME: {f['mimeType']}")
 
 if __name__ == "__main__":
     main()
