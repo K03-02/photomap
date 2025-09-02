@@ -5,6 +5,7 @@ import json
 import base64
 import pandas as pd
 from PIL import Image, ImageDraw
+import pyheif
 import exifread
 from github import Github
 from google.oauth2 import service_account
@@ -40,23 +41,29 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
+# ===== PillowでHEICを安全に開く =====
 def pil_open_safe(file_bytes, mime_type):
     try:
-        if 'heic' in mime_type.lower():
-            import pillow_heif
-            heif_file = pillow_heif.read_heif(file_bytes)
-            return heif_file.convert("RGB")
+        if 'heic' in mime_type.lower() or 'heif' in mime_type.lower():
+            heif_file = pyheif.read_heif(file_bytes)
+            img = heif_file.to_pillow()  # 安定変換
         else:
-            return Image.open(io.BytesIO(file_bytes))
+            img = Image.open(io.BytesIO(file_bytes))
+        # モードを安定させる
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA")
+        return img
     except Exception as e:
         print(f"⚠️ Cannot open image: {e}")
         return None
 
+# ===== EXIF 抽出（変更なし） =====
 def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
         if 'heic' in mime_type.lower():
-            img = pil_open_safe(file_bytes, mime_type)
+            heif_file = pyheif.read_heif(file_bytes)
+            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
             fbytes = io.BytesIO()
             img.save(fbytes, format='JPEG')
             fbytes.seek(0)
@@ -78,9 +85,10 @@ def extract_exif(file_bytes, mime_type):
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
     except:
-        pass
+        print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
+# ===== アイコン・ポップアップ生成 =====
 def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
@@ -138,9 +146,7 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];",
-]
-
+    "var markers = [];"]
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
@@ -148,7 +154,7 @@ for _, row in df.iterrows():
         popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
@@ -185,3 +191,4 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
