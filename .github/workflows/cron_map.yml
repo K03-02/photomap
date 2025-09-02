@@ -14,7 +14,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 必要なライブラリをインストール
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -28,29 +27,22 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
-          pip install pillow pyheif exifread requests
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib \
+                      pillow pyheif exifread PyGithub pandas requests
 
-      # GDRIVE_TOKEN がセットされているか確認（長さだけ表示）
-      - name: Debug GDRIVE_TOKEN
-        run: |
-          python - <<'EOF'
-          import os
-          token = os.environ.get("GDRIVE_TOKEN", "")
-          print("GDRIVE_TOKEN length:", len(token))
-          EOF
+      - name: Decode service account key
+        run: echo "$SERVICE_ACCOUNT_B64" | base64 -d > service_account.json
         env:
-          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+          SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
 
-      # generate_map.py を実行
       - name: Run generate_map.py
         env:
-          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+          SERVICE_ACCOUNT_B64: ${{ secrets.SERVICE_ACCOUNT_B64 }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/generate_map.py
 
-      # 作成した HTML を GitHub Pages にデプロイ
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./output
-
