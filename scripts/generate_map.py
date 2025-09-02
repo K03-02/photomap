@@ -7,13 +7,12 @@ import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
-from github import Github
+from github import Github, Auth
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-# ===== HEICをPillowで開く準備 =====
-register_heif_opener()
+register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
@@ -44,13 +43,9 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-# ===== Pillowで画像を安全に開く（HEIC対応） =====
 def pil_open_safe(file_bytes, mime_type):
     try:
-        if 'heic' in mime_type.lower() or 'heif' in mime_type.lower():
-            img = Image.open(io.BytesIO(file_bytes))  # pillow-heif が裏で処理
-        else:
-            img = Image.open(io.BytesIO(file_bytes))
+        img = Image.open(io.BytesIO(file_bytes))
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGBA")
         return img
@@ -58,7 +53,6 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-# ===== EXIF 抽出（変更なし） =====
 def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
@@ -80,7 +74,6 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-# ===== Base64生成 =====
 def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
@@ -103,7 +96,7 @@ def heic_to_base64_popup(file_bytes, mime_type, width=200):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== キャッシュ =====
+# ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE,'r') as f:
         cached_files = json.load(f)
@@ -112,23 +105,31 @@ else:
 
 rows = []
 for f in list_image_files(FOLDER_ID):
+    # 新しい画像だけ処理
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
-    print(f"Processing {f['name']}...")
+    print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-    row = {'filename': f['name'], 'latitude': lat, 'longitude': lon, 'datetime': dt,
-           'file_id': f['id'], 'mime_type': f['mimeType']}
+    row = {
+        'filename': f['name'],
+        'latitude': lat,
+        'longitude': lon,
+        'datetime': dt,
+        'file_id': f['id'],
+        'mime_type': f['mimeType']
+    }
     rows.append(row)
-    cached_files[f['id']] = row
+    cached_files[f['id']] = row  # 新規キャッシュ追加
 
+# キャッシュ更新
 with open(CACHE_FILE,'w') as f:
     json.dump(cached_files,f)
 
 df = pd.DataFrame(rows)
 
-# ===== HTML生成 =====
+# ===== HTML生成（既存HTMLを維持しつつ新規のみ追加） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -139,6 +140,7 @@ html_lines = [
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
     "var markers = [];"]
+
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
@@ -173,14 +175,14 @@ html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
 
-# ===== GitHub 更新 =====
-from github import Github, Auth
+# ===== GitHub更新 =====
 g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
 repo = g.get_repo(REPO_NAME)
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML", html_str, contents.sha, branch=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML with new images", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
