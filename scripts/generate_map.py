@@ -2,24 +2,39 @@
 import os
 import io
 import json
+import base64
 import requests
+from datetime import datetime
 from PIL import Image
 import pyheif
 import exifread
-from datetime import datetime
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request
 
-# ========== Google Drive からファイルを取ってくる部分 ==========
+# ========== Google Drive 認証 ==========
+
+def get_access_token():
+    sa_info = json.loads(base64.b64decode(os.environ["SERVICE_ACCOUNT_B64"]))
+    credentials = service_account.Credentials.from_service_account_info(
+        sa_info,
+        scopes=["https://www.googleapis.com/auth/drive.readonly"],
+    )
+    credentials.refresh(Request())
+    return credentials.token
+
 def download_file(file_id):
+    token = get_access_token()
     url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-    headers = {"Authorization": f"Bearer {os.environ.get('GDRIVE_TOKEN','')}"}
+    headers = {"Authorization": f"Bearer {token}"}
     r = requests.get(url, headers=headers)
     if r.status_code == 200:
         return r.content
     else:
-        print(f"⚠️ Download failed for {file_id}: {r.status_code}")
+        print(f"⚠️ Download failed for {file_id}: {r.status_code}, {r.text[:200]}")
         return None
 
 # ========== 画像を安全に開く ==========
+
 def pil_open_safe(file_bytes, mime_type):
     if mime_type in ["image/heic", "image/heif"]:
         heif_file = pyheif.read_heif(file_bytes)
@@ -36,12 +51,12 @@ def pil_open_safe(file_bytes, mime_type):
         return Image.open(io.BytesIO(file_bytes)), None
 
 # ========== GPS 変換用ユーティリティ ==========
+
 def _convert_to_degrees(value):
     d, m, s = value.values
-    return d.num/d.den + (m.num/m.den)/60 + (s.num/s.den)/3600
+    return d.num / d.den + (m.num / m.den) / 60 + (s.num / s.den) / 3600
 
 def _convert_heif_gps(data):
-    # ISO BMFFのExifは tiffバイト列になっている場合が多い
     tags = exifread.process_file(io.BytesIO(data), details=False)
     return _extract_from_exifread(tags)
 
@@ -60,10 +75,10 @@ def _extract_from_exifread(tags):
     return lat, lon, dt
 
 # ========== EXIF 抽出 ==========
+
 def extract_exif(file_bytes, mime_type, heif_metadata=None):
     try:
         if mime_type in ["image/heic", "image/heif"]:
-            # pyheif.metadata に Exif チャンクがある場合
             exif_data = None
             if heif_metadata:
                 for m in heif_metadata:
@@ -83,6 +98,7 @@ def extract_exif(file_bytes, mime_type, heif_metadata=None):
         return None, None, None
 
 # ========== メイン処理 ==========
+
 def process_file(file_id, filename, mime_type):
     print(f"\n=== Processing file: {filename} ===")
     file_bytes = download_file(file_id)
@@ -111,18 +127,20 @@ def process_file(file_id, filename, mime_type):
 def main():
     # ダミー: Google Drive から拾うファイルリストを仮定
     files = [
-        {"id":"xxxx", "name":"IMG_3901.HEIC", "mimeType":"image/heic"},
-        {"id":"yyyy", "name":"PXL_20250828_233920019.jpg", "mimeType":"image/jpeg"},
+        {"id": "xxxx", "name": "IMG_3901.HEIC", "mimeType": "image/heic"},
+        {"id": "yyyy", "name": "PXL_20250828_233920019.jpg", "mimeType": "image/jpeg"},
     ]
 
     results = []
     for f in files:
         res = process_file(f["id"], f["name"], f["mimeType"])
-        if res: results.append(res)
+        if res:
+            results.append(res)
 
-    with open("mapdata.json","w",encoding="utf-8") as f:
-        json.dump(results,f,ensure_ascii=False,indent=2)
+    with open("mapdata.json", "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
     main()
+
 
