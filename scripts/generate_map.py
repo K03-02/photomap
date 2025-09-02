@@ -5,7 +5,6 @@ import json
 import base64
 import pandas as pd
 from PIL import Image, ImageDraw
-import pyheif
 import exifread
 from github import Github
 from google.oauth2 import service_account
@@ -44,8 +43,9 @@ def get_file_bytes(file_id):
 def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            return heif_file.to_pillow().convert("RGB")
+            import pillow_heif
+            heif_file = pillow_heif.read_heif(file_bytes)
+            return heif_file.convert("RGB")
         else:
             return Image.open(io.BytesIO(file_bytes))
     except Exception as e:
@@ -55,13 +55,14 @@ def pil_open_safe(file_bytes, mime_type):
 def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
-        img = pil_open_safe(file_bytes, mime_type)
-        if img is None:
-            return lat, lon, dt
-        fbytes = io.BytesIO()
-        img.save(fbytes, format='JPEG')
-        fbytes.seek(0)
-        tags = exifread.process_file(fbytes, details=False)
+        if 'heic' in mime_type.lower():
+            img = pil_open_safe(file_bytes, mime_type)
+            fbytes = io.BytesIO()
+            img.save(fbytes, format='JPEG')
+            fbytes.seek(0)
+            tags = exifread.process_file(fbytes, details=False)
+        else:
+            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -184,4 +185,3 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
