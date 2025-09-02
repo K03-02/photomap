@@ -1,58 +1,56 @@
-name: Generate Map
+name: Generate Photo Map
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      # 必要なライブラリをインストール
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libheif-examples libheif-dev libde265-dev
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests Pillow pyheif exifread google-auth google-auth-oauthlib
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
 
-    - name: Decode service account key
-      run: |
-        echo "${{ secrets.SERVICE_ACCOUNT_B64 }}" | base64 -d > service_account.json
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pillow pyheif exifread requests
 
-    - name: Generate short-lived access token
-      id: auth
-      run: |
-        python - <<'EOF'
-        import json
-        from google.oauth2 import service_account
-        from google.auth.transport.requests import Request
+      # GDRIVE_TOKEN がセットされているか確認（長さだけ表示）
+      - name: Debug GDRIVE_TOKEN
+        run: |
+          python - <<'EOF'
+          import os
+          token = os.environ.get("GDRIVE_TOKEN", "")
+          print("GDRIVE_TOKEN length:", len(token))
+          EOF
+        env:
+          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
 
-        creds = service_account.Credentials.from_service_account_file(
-            "service_account.json",
-            scopes=["https://www.googleapis.com/auth/drive.readonly"],
-        )
-        creds.refresh(Request())
-        print(f"GDRIVE_TOKEN={creds.token}")
-        with open(os.environ["GITHUB_ENV"], "a") as f:
-            f.write(f"GDRIVE_TOKEN={creds.token}\n")
-        EOF
+      # generate_map.py を実行
+      - name: Run generate_map.py
+        env:
+          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+        run: python scripts/generate_map.py
 
-    - name: Run generate_map.py
-      run: |
-        python scripts/generate_map.py
+      # 作成した HTML を GitHub Pages にデプロイ
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./output
 
-    - name: Commit and push generated data
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add mapdata.json
-        git commit -m "Update mapdata.json" || echo "No changes"
-        git push
