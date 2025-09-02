@@ -55,16 +55,20 @@ def pil_open_safe(file_bytes, mime_type):
 def extract_exif(file_bytes, mime_type, filename=""):
     lat = lon = dt = ''
     try:
-        img = pil_open_safe(file_bytes, mime_type)
-        if img is None:
-            return lat, lon, dt
+        if 'heic' in mime_type.lower() or 'heif' in mime_type.lower():
+            heif_file = pyheif.read_heif(file_bytes)
+            exif_data = None
+            for m in heif_file.metadata or []:
+                if m["type"] == "Exif":
+                    exif_data = m["data"]
+                    break
+            if exif_data:
+                tags = exifread.process_file(io.BytesIO(exif_data), details=False)
+            else:
+                tags = {}
+        else:
+            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
 
-        fbytes = io.BytesIO()
-        img.save(fbytes, format='JPEG')
-        fbytes.seek(0)
-        tags = exifread.process_file(fbytes, details=False)
-
-        # ===== ここでログ出力 =====
         if tags:
             print(f"--- EXIF for {filename} ---")
             for tag in tags:
