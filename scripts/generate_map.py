@@ -5,12 +5,15 @@ import json
 import base64
 import pandas as pd
 from PIL import Image, ImageDraw
-import pyheif
+from pillow_heif import register_heif_opener
 import exifread
 from github import Github
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+
+# ===== HEICをPillowで開く準備 =====
+register_heif_opener()
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
@@ -41,15 +44,13 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-# ===== PillowでHEICを安全に開く =====
+# ===== Pillowで画像を安全に開く（HEIC対応） =====
 def pil_open_safe(file_bytes, mime_type):
     try:
         if 'heic' in mime_type.lower() or 'heif' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            img = heif_file.to_pillow()  # 安定変換
+            img = Image.open(io.BytesIO(file_bytes))  # pillow-heif が裏で処理
         else:
             img = Image.open(io.BytesIO(file_bytes))
-        # モードを安定させる
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGBA")
         return img
@@ -61,16 +62,7 @@ def pil_open_safe(file_bytes, mime_type):
 def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
-        if 'heic' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
-            fbytes = io.BytesIO()
-            img.save(fbytes, format='JPEG')
-            fbytes.seek(0)
-            tags = exifread.process_file(fbytes, details=False)
-        else:
-            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
-
+        tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
@@ -88,7 +80,7 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-# ===== アイコン・ポップアップ生成 =====
+# ===== Base64生成 =====
 def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
@@ -182,7 +174,8 @@ html_lines.append("</script></body></html>")
 html_str = "\n".join(html_lines)
 
 # ===== GitHub 更新 =====
-g = Github(os.environ['GITHUB_TOKEN'])
+from github import Github, Auth
+g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
 repo = g.get_repo(REPO_NAME)
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
@@ -191,4 +184,3 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
