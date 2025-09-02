@@ -14,7 +14,7 @@ from googleapiclient.http import MediaIoBaseDownload
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
-REPO_NAME = 'YOUR_REPO'
+REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
 CACHE_FILE = 'photomap_cache.json'
