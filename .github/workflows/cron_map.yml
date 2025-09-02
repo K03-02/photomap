@@ -28,7 +28,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib \
-                      pillow pyheif exifread PyGithub pandas requests
+                      pillow pyheif exifread PyGithub pandas pillow_heif requests
 
       - name: Decode service account key
         run: echo "$SERVICE_ACCOUNT_B64" | base64 -d > service_account.json
