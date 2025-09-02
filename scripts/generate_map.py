@@ -52,11 +52,11 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
+# ===== EXIF抽出 =====
 def extract_exif(file_bytes, mime_type):
     lat, lon, dt = '', '', ''
     try:
         if 'heic' in mime_type.lower():
-            # HEIC専用処理
             heif_file = pyheif.read_heif(file_bytes)
             image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
             fbytes = io.BytesIO()
@@ -64,9 +64,9 @@ def extract_exif(file_bytes, mime_type):
             fbytes.seek(0)
             tags = exifread.process_file(fbytes, details=False)
         else:
-            # JPEGやその他は今まで通り
             tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
 
+        # GPS変換
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
@@ -82,7 +82,7 @@ def extract_exif(file_bytes, mime_type):
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
 
-        # デバッグ用にすべてのEXIFを出力
+        # デバッグ用EXIF出力
         print(f"--- EXIF for {mime_type} ---")
         for t in tags.keys():
             print(f"{t}: {tags[t]}")
@@ -92,7 +92,7 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF extraction error for {mime_type}: {e}")
     return lat, lon, dt
 
-
+# ===== HEIC→Base64変換 =====
 def heic_to_base64_circle(file_bytes, size=50):
     try:
         img = pil_open_safe(file_bytes, 'image/heic')
@@ -110,7 +110,6 @@ def heic_to_base64_circle(file_bytes, size=50):
         print(f"⚠️ heic_to_base64_circle error: {e}")
         return None
 
-
 def heic_to_base64_popup(file_bytes, width=200):
     try:
         img = pil_open_safe(file_bytes, 'image/heic')
@@ -126,31 +125,7 @@ def heic_to_base64_popup(file_bytes, width=200):
         print(f"⚠️ heic_to_base64_popup error: {e}")
         return None
 
-
-
-def heic_to_base64_circle(file_bytes, mime_type, size=50):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
-    img = img.resize((size, size))
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,size,size), fill=255)
-    img.putalpha(mask)
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-
-def heic_to_base64_popup(file_bytes, mime_type, width=200):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
-    w, h = img.size
-    new_h = int(h * (width / w))
-    img = img.resize((width, new_h))
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-
-# ===== キャッシュ =====
+# ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE,'r') as f:
         cached_files = json.load(f)
@@ -185,22 +160,20 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];"
-]
+    "var markers = [];"]
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
-        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
-        if icon_data_uri and popup_data_uri:
-            html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
+        icon_data_uri = heic_to_base64_circle(file_bytes) if 'heic' in row['mime_type'].lower() else None
+        popup_data_uri = heic_to_base64_popup(file_bytes) if 'heic' in row['mime_type'].lower() else None
+        html_lines.append(f"""
+var icon = L.icon({{iconUrl: '{icon_data_uri or ''}', iconSize: [50,50]}});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}' width='200'/>");
++ "<img src='{popup_data_uri or ''}' width='200'/>");
 """)
 
 html_lines.append("""
