@@ -52,6 +52,7 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
+# ===== EXIF 抽出 =====
 def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
@@ -64,15 +65,6 @@ def extract_exif(file_bytes, mime_type):
             tags = exifread.process_file(fbytes, details=False)
         else:
             tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
-
-        # EXIFをログ出力
-        if tags:
-            print(f"--- EXIF for {mime_type} ---")
-            for k, v in tags.items():
-                print(f"{k}: {v}")
-            print("--- end EXIF ---")
-        else:
-            print(f"⚠️ EXIF not found for {mime_type}")
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -87,14 +79,19 @@ def extract_exif(file_bytes, mime_type):
             lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
+        # ログ出力
+        print(f"--- EXIF for {mime_type} ---")
+        for t in tags:
+            print(t, ":", tags[t])
+        print("--- end EXIF ---")
     except:
-        pass
+        print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-def heic_to_base64_circle(file_bytes, size=50):
-    img = pil_open_safe(file_bytes, 'image/heic')
-    if img is None:
-        return None
+# ===== アイコン・ポップアップ生成 =====
+def heic_to_base64_circle(file_bytes, mime_type, size=50):
+    img = pil_open_safe(file_bytes, mime_type)
+    if img is None: return None
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
@@ -155,19 +152,16 @@ html_lines = [
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
+        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
         popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
-        icon_data_uri = None
-        if 'heic' in row['mime_type'].lower():
-            icon_data_uri = heic_to_base64_circle(file_bytes)
-
-        icon_js = f"L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}})" if icon_data_uri else "undefined"
-
-        html_lines.append(f"""
-var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: {icon_js}}}).addTo(map);
+        if icon_data_uri and popup_data_uri:
+            html_lines.append(f"""
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}});
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri or ''}' width='200'/>");
++ "<img src='{popup_data_uri}' width='200'/>");
 """)
 
 html_lines.append("""
