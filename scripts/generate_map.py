@@ -43,28 +43,25 @@ def get_file_bytes(file_id):
 
 def pil_open_safe(file_bytes, mime_type):
     try:
-        if 'heic' in mime_type.lower() or 'heif' in mime_type.lower():
+        if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            return Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            return heif_file.to_pillow().convert("RGB")
         else:
             return Image.open(io.BytesIO(file_bytes))
     except Exception as e:
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-# ===== EXIF 抽出 =====
 def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
-        if 'heic' in mime_type.lower():
-            heif_file = pyheif.read_heif(file_bytes)
-            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
-            fbytes = io.BytesIO()
-            img.save(fbytes, format='JPEG')
-            fbytes.seek(0)
-            tags = exifread.process_file(fbytes, details=False)
-        else:
-            tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
+        img = pil_open_safe(file_bytes, mime_type)
+        if img is None:
+            return lat, lon, dt
+        fbytes = io.BytesIO()
+        img.save(fbytes, format='JPEG')
+        fbytes.seek(0)
+        tags = exifread.process_file(fbytes, details=False)
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -79,16 +76,10 @@ def extract_exif(file_bytes, mime_type):
             lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
-        # ログ出力
-        print(f"--- EXIF for {mime_type} ---")
-        for t in tags:
-            print(t, ":", tags[t])
-        print("--- end EXIF ---")
     except:
-        print(f"⚠️ EXIF not found for {mime_type}")
+        pass
     return lat, lon, dt
 
-# ===== アイコン・ポップアップ生成 =====
 def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
@@ -146,7 +137,7 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];"
+    "var markers = [];",
 ]
 
 for _, row in df.iterrows():
@@ -193,3 +184,4 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
