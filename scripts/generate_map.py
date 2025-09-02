@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 # ===== 設定 =====
-FOLDER_ID = 'YOUR_FOLDER_ID'
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
 REPO_NAME = 'YOUR_REPO'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
