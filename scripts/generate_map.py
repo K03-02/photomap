@@ -52,21 +52,28 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-# ===== EXIF抽出 =====
 def extract_exif(file_bytes, mime_type):
-    lat, lon, dt = '', '', ''
+    lat = lon = dt = ''
     try:
         if 'heic' in mime_type.lower():
             heif_file = pyheif.read_heif(file_bytes)
-            image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
+            img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw", heif_file.mode)
             fbytes = io.BytesIO()
-            image.save(fbytes, format='JPEG')
+            img.save(fbytes, format='JPEG')
             fbytes.seek(0)
             tags = exifread.process_file(fbytes, details=False)
         else:
             tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
 
-        # GPS変換
+        # EXIFをログ出力
+        if tags:
+            print(f"--- EXIF for {mime_type} ---")
+            for k, v in tags.items():
+                print(f"{k}: {v}")
+            print("--- end EXIF ---")
+        else:
+            print(f"⚠️ EXIF not found for {mime_type}")
+
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
@@ -78,54 +85,36 @@ def extract_exif(file_bytes, mime_type):
                 return dd
             lat = dms_to_dd(tags['GPS GPSLatitude'], tags['GPS GPSLatitudeRef'])
             lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
-
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
-
-        # デバッグ用EXIF出力
-        print(f"--- EXIF for {mime_type} ---")
-        for t in tags.keys():
-            print(f"{t}: {tags[t]}")
-        print("--- end EXIF ---")
-
-    except Exception as e:
-        print(f"⚠️ EXIF extraction error for {mime_type}: {e}")
+    except:
+        pass
     return lat, lon, dt
 
-# ===== HEIC→Base64変換 =====
 def heic_to_base64_circle(file_bytes, size=50):
-    try:
-        img = pil_open_safe(file_bytes, 'image/heic')
-        if img is None:
-            return None
-        img = img.resize((size, size))
-        mask = Image.new("L", (size, size), 0)
-        draw = ImageDraw.Draw(mask)
-        draw.ellipse((0,0,size,size), fill=255)
-        img.putalpha(mask)
-        buf = io.BytesIO()
-        img.save(buf, format='PNG')
-        return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-    except Exception as e:
-        print(f"⚠️ heic_to_base64_circle error: {e}")
+    img = pil_open_safe(file_bytes, 'image/heic')
+    if img is None:
         return None
+    img = img.resize((size, size))
+    mask = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0,0,size,size), fill=255)
+    img.putalpha(mask)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def heic_to_base64_popup(file_bytes, width=200):
-    try:
-        img = pil_open_safe(file_bytes, 'image/heic')
-        if img is None:
-            return None
-        w, h = img.size
-        new_h = int(h * (width / w))
-        img = img.resize((width, new_h))
-        buf = io.BytesIO()
-        img.save(buf, format='PNG')
-        return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-    except Exception as e:
-        print(f"⚠️ heic_to_base64_popup error: {e}")
-        return None
+def heic_to_base64_popup(file_bytes, mime_type, width=200):
+    img = pil_open_safe(file_bytes, mime_type)
+    if img is None: return None
+    w, h = img.size
+    new_h = int(h * (width / w))
+    img = img.resize((width, new_h))
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-# ===== キャッシュ読み込み =====
+# ===== キャッシュ =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE,'r') as f:
         cached_files = json.load(f)
@@ -160,16 +149,21 @@ html_lines = [
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
-    "var markers = [];"]
+    "var markers = [];"
+]
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes) if 'heic' in row['mime_type'].lower() else None
-        popup_data_uri = heic_to_base64_popup(file_bytes) if 'heic' in row['mime_type'].lower() else None
+        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
+        icon_data_uri = None
+        if 'heic' in row['mime_type'].lower():
+            icon_data_uri = heic_to_base64_circle(file_bytes)
+
+        icon_js = f"L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}})" if icon_data_uri else "undefined"
+
         html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri or ''}', iconSize: [50,50]}});
-var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: {icon_js}}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
