@@ -52,16 +52,26 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-def extract_exif(file_bytes, mime_type):
+def extract_exif(file_bytes, mime_type, filename=""):
     lat = lon = dt = ''
     try:
         img = pil_open_safe(file_bytes, mime_type)
         if img is None:
             return lat, lon, dt
+
         fbytes = io.BytesIO()
         img.save(fbytes, format='JPEG')
         fbytes.seek(0)
         tags = exifread.process_file(fbytes, details=False)
+
+        # ===== ここでログ出力 =====
+        if tags:
+            print(f"--- EXIF for {filename} ---")
+            for tag in tags:
+                print(f"{tag}: {tags[tag]}")
+            print(f"--- end EXIF ---")
+        else:
+            print(f"⚠️ EXIF not found for {filename}")
 
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -76,9 +86,10 @@ def extract_exif(file_bytes, mime_type):
             lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
-    except:
-        pass
+    except Exception as e:
+        print(f"⚠️ extract_exif error for {filename}: {e}")
     return lat, lon, dt
+
 
 def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img = pil_open_safe(file_bytes, mime_type)
