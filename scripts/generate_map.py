@@ -16,7 +16,7 @@ register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
-SHARED_DRIVE_ID = 'YOUR_SHARED_DRIVE_ID'  # ← ここに作った共有ドライブIDを入れる
+SHARED_DRIVE_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # ← ここに作った共有ドライブIDを入れる
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
