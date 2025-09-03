@@ -3,14 +3,13 @@ import os
 import io
 import json
 import base64
-import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
 register_heif_opener()  # HEIC対応
 
@@ -20,12 +19,13 @@ REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
 CACHE_FILE = 'photomap_cache.json'
-IMAGES_DIR = 'images'  # GitHub内の画像フォルダ
+THUMBNAIL_SIZE = 50
+POPUP_WIDTH = 400
 
 # ===== Google Drive 認証 =====
 service_account_info = json.loads(base64.b64decode(os.environ['SERVICE_ACCOUNT_B64']))
 credentials = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=["https://www.googleapis.com/auth/drive.readonly"]
+    service_account_info, scopes=["https://www.googleapis.com/auth/drive"]
 )
 drive_service = build('drive', 'v3', credentials=credentials)
 
@@ -75,24 +75,26 @@ def extract_exif(file_bytes):
         print(f"⚠️ EXIF not found")
     return lat, lon, dt
 
-def create_thumbnail_with_frame(img, size=50):
-    """丸く切り抜き＋ピン風フレーム"""
+def create_thumbnail(img, size=THUMBNAIL_SIZE):
     img_thumb = img.copy()
-    img_thumb.thumbnail((size,size))
-    # マスク作成
+    img_thumb.thumbnail((size, size))
     mask = Image.new("L", img_thumb.size, 0)
     draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,img_thumb.size[0],img_thumb.size[1]), fill=255)
+    draw.ellipse((0,0,img_thumb.size[0], img_thumb.size[1]), fill=255)
     img_thumb.putalpha(mask)
-    # 枠作成
-    frame = Image.new("RGBA", (size, size), (0,0,0,0))
-    frame_draw = ImageDraw.Draw(frame)
-    frame_draw.ellipse((0,0,size-1,size-1), outline=(255,0,0,255), width=3)  # 赤い枠
-    frame.paste(img_thumb, (0,0), mask=img_thumb)
-    # 保存
+    # 白い縁を追加
+    border = Image.new("RGBA", (img_thumb.size[0]+4, img_thumb.size[1]+4), (255,255,255,255))
+    border.paste(img_thumb, (2,2), img_thumb)
+    return border
+
+def save_to_drive(img, name, parent_id):
     buf = io.BytesIO()
-    frame.save(buf, format='PNG')
-    return buf.getvalue()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    file_metadata = {'name': name, 'parents':[parent_id]}
+    media = MediaFileUpload(io.BytesIO(buf.read()), mimetype='image/png', resumable=True)
+    file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webContentLink').execute()
+    return file['webContentLink'].replace('&export=download','')
 
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
@@ -106,57 +108,38 @@ for f in list_image_files(FOLDER_ID):
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
+
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes)
+    img = pil_open_safe(file_bytes)
+    if img is None:
+        continue
+
+    # サムネイルとポップアップ用画像を Drive にアップ
+    thumb_link = save_to_drive(create_thumbnail(img), f"{f['name']}_thumb.png", FOLDER_ID)
+    popup_link = save_to_drive(img, f"{f['name']}_popup.png", FOLDER_ID)
+
     row = {
         'filename': f['name'],
         'latitude': lat,
         'longitude': lon,
         'datetime': dt,
-        'file_id': f['id']
+        'thumb_url': thumb_link,
+        'popup_url': popup_link
     }
     rows.append(row)
     cached_files[f['id']] = row
 
+# キャッシュ更新
 with open(CACHE_FILE,'w') as f:
     json.dump(cached_files,f)
-
-df = pd.DataFrame(rows)
-
-# ===== GitHub更新準備 =====
-g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
-repo = g.get_repo(REPO_NAME)
-
-# imagesフォルダ作成
-try:
-    repo.get_contents(IMAGES_DIR, ref=BRANCH_NAME)
-except:
-    repo.create_file(f"{IMAGES_DIR}/.gitkeep", "create images dir", "", branch=BRANCH_NAME)
-
-# 新規画像アップロード（サムネイル＋ポップアップ）
-for _, row in df.iterrows():
-    base_name = row['filename'].rsplit('.',1)[0] + '.png'
-    remote_path = f"{IMAGES_DIR}/{base_name}"
-    try:
-        repo.get_contents(remote_path, ref=BRANCH_NAME)
-        continue
-    except:
-        file_bytes = get_file_bytes(row['file_id'])
-        img = pil_open_safe(file_bytes)
-        if img is None: continue
-        thumb_bytes = create_thumbnail_with_frame(img, size=50)  # サムネイル
-        repo.create_file(remote_path, f"upload {base_name}", thumb_bytes, branch=BRANCH_NAME)
 
 # ===== HTML生成 =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
-    "<style>",
-    "#map { height: 100vh; width: 100%; }",
-    "img.popup-img { width: 200%; max-width: none; }",  # ポップアップで2倍表示
-    ".circle-icon img { border-radius:50%; border:2px solid red; }",
-    "</style>",
+    "<style>#map { height: 100vh; width: 100%; }</style>",
     "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>",
     "<div id='map'></div><script>",
@@ -164,17 +147,15 @@ html_lines = [
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
     "var markers = [];"]
 
-for _, row in df.iterrows():
+for row in rows:
     if row['latitude'] and row['longitude']:
-        img_name = row['filename'].rsplit('.',1)[0]+'.png'
-        img_url = f"https://raw.githubusercontent.com/{REPO_NAME}/main/{IMAGES_DIR}/{img_name}"
         html_lines.append(f"""
-var icon = L.icon({{iconUrl:'{img_url}', iconSize:[50,50], className:'circle-icon'}});
+var icon = L.icon({{iconUrl: '{row['thumb_url']}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img class='popup-img' src='{img_url}'/>");
++ "<img src='{row['popup_url']}' width='{POPUP_WIDTH*2}'/>");
 """)
 
 html_lines.append("""
@@ -191,16 +172,19 @@ map.on('zoomend', function(){
         }
     });
 });
-</script></body></html>
 """)
+html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
 
-# ===== GitHub HTML更新 =====
+# ===== GitHub更新 =====
+g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
+repo = g.get_repo(REPO_NAME)
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML with framed thumbnails", html_str, contents.sha, branch=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML with Drive images", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
