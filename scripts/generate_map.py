@@ -10,7 +10,7 @@ import exifread
 from github import Github, Auth
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload  # ← ここ追加
 
 register_heif_opener()
 
@@ -38,8 +38,8 @@ def list_image_files(folder_id):
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
-    done = False
     downloader = MediaIoBaseDownload(fh, request)
+    done = False
     while not done:
         _, done = downloader.next_chunk()
     return fh.getvalue()
@@ -106,7 +106,7 @@ def save_to_drive(img, filename):
         'parents': [FOLDER_ID]
     }
     media = MediaIoBaseUpload(buf, mimetype='image/png')
-    uploaded = drive_service.files().create(body=file_metadata, media_body=media, supportsAllDrives=True, fields='id, webContentLink').execute()
+    uploaded = drive_service.files().create(body=file_metadata, media_body=media, supportsAllDrives=True, fields='id').execute()
     file_id = uploaded['id']
     # 公開リンク
     drive_service.permissions().create(fileId=file_id, body={"type":"anyone","role":"reader"}, supportsAllDrives=True).execute()
@@ -184,3 +184,4 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
