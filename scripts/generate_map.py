@@ -4,7 +4,7 @@ import io
 import json
 import base64
 import pandas as pd
-from PIL import Image, ImageDraw
+from PIL import Image
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
@@ -74,14 +74,10 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-def heic_to_base64_circle(file_bytes, mime_type, size=50):
+def image_to_base64(file_bytes, mime_type, size=60):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
     img = img.resize((size, size))
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,size,size), fill=255)
-    img.putalpha(mask)
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
@@ -129,13 +125,37 @@ with open(CACHE_FILE,'w') as f:
 
 df = pd.DataFrame(rows)
 
-# ===== HTML生成（既存HTMLを維持しつつ新規のみ追加） =====
+# ===== HTML生成（ピン風アイコン付き） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
     "<style>#map { height: 100vh; width: 100%; }</style>",
     "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
-    "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>",
+    "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>",
+    "<style>",
+    ".custom-pin .pin {",
+    "  position: relative;",
+    "  width: 60px; height: 60px;",
+    "  border: 3px solid #fff;",
+    "  border-radius: 50%;",
+    "  box-shadow: 0 0 5px rgba(0,0,0,0.5);",
+    "  overflow: hidden;",
+    "}",
+    ".custom-pin .pin::after {",
+    "  content: '';",
+    "  position: absolute;",
+    "  left: 50%;",
+    "  bottom: -18px;",
+    "  margin-left: -12px;",
+    "  width: 0; height: 0;",
+    "  border: 12px solid transparent;",
+    "  border-top: 18px solid #fff;",
+    "}",
+    ".custom-pin .pin img {",
+    "  width: 100%; height: 100%; object-fit: cover;",
+    "}",
+    "</style>",
+    "</head><body>",
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
@@ -144,33 +164,23 @@ html_lines = [
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
+        icon_data_uri = image_to_base64(file_bytes, row['mime_type'])
         popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [100,100]}}); 
-var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
+var pinIcon = L.divIcon({{
+    className: "custom-pin",
+    html: `<div class="pin"><img src='{icon_data_uri}'/></div>`,
+    iconSize: [60, 78],
+    iconAnchor: [30, 78]
+}});
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: pinIcon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}' width='200'/>");
++ "<img src='{popup_data_uri}' width='400'/>");
 """)
 
-html_lines.append("""
-map.on('zoomend', function(){
-    var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2);
-    markers.forEach(function(m){
-        var img = m.getElement().querySelector('img');
-        if(img){
-            var size = 50 * scale;
-            if(size>60){ size=60; }
-            img.style.width = size + 'px';
-            img.style.height = size + 'px';
-        }
-    });
-});
-""")
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
@@ -180,9 +190,8 @@ g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
 repo = g.get_repo(REPO_NAME)
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML with new images", html_str, contents.sha, branch=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML with pin-style icons", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
