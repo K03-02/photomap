@@ -16,6 +16,7 @@ register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
+SHARED_DRIVE_ID = 'YOUR_SHARED_DRIVE_ID'  # ← ここに作った共有ドライブIDを入れる
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
@@ -75,57 +76,42 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-# ===== サムネイル作成 & Google Driveにアップロード =====
+# ===== 共有ドライブアップロード =====
+def save_to_drive(img, name):
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    media = MediaIoBaseUpload(buf, mimetype='image/png', resumable=True)
+    file_metadata = {
+        'name': name,
+        'parents': [SHARED_DRIVE_ID]
+    }
+    uploaded = drive_service.files().create(body=file_metadata, media_body=media, supportsAllDrives=True).execute()
+    return f"https://drive.google.com/uc?id={uploaded['id']}"
+
+# ===== サムネイル作成 =====
 def create_thumbnail(img, size=50):
-    # サムネイル1/2サイズで作る
-    w, h = img.size
-    thumb = img.resize((w//2, h//2), Image.LANCZOS)
-    # 丸い白い縁をつける
-    mask = Image.new("L", thumb.size, 0)
+    img = img.copy()
+    img.thumbnail((size, size), Image.Resampling.LANCZOS)
+    # 白丸縁
+    mask = Image.new("L", img.size, 0)
     draw = ImageDraw.Draw(mask)
-    draw.ellipse((0, 0, thumb.size[0], thumb.size[1]), fill=255)
-    thumb.putalpha(mask)
-    # 白縁
-    border = Image.new("RGBA", (thumb.size[0]+4, thumb.size[1]+4), (255,255,255,0))
-    border.paste(thumb, (2,2), thumb)
+    draw.ellipse((0,0,img.size[0]-1,img.size[1]-1), fill=255)
+    img.putalpha(mask)
+    border = Image.new("RGBA", img.size, (255,255,255,0))
+    draw_border = ImageDraw.Draw(border)
+    draw_border.ellipse((0,0,img.size[0]-1,img.size[1]-1), outline=(255,255,255,255), width=4)
+    border.paste(img, (0,0), mask=img)
     return border
 
-def save_to_drive(img, name, parent_id):
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    buf.seek(0)
-    file_metadata = {'name': name, 'parents':[parent_id]}
-    media = MediaIoBaseUpload(buf, mimetype='image/png', resumable=True)
-    file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webContentLink').execute()
-    return file['webContentLink'].replace('&export=download','')
-
-def heic_to_base64_popup(file_bytes, mime_type, scale=2):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
-    w, h = img.size
-    new_w = w * scale
-    new_h = h * scale
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    buf.seek(0)
-    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-
-def heic_to_base64_circle(file_bytes, mime_type, size=25):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
-    img = img.resize((size, size), Image.LANCZOS)
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,size,size), fill=255)
-    img.putalpha(mask)
-    # 白縁
-    border = Image.new("RGBA", (size+4, size+4), (255,255,255,0))
-    border.paste(img, (2,2), img)
-    buf = io.BytesIO()
-    border.save(buf, format='PNG')
-    buf.seek(0)
-    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+# ===== ポップアップ画像作成 =====
+def create_popup(img, width=200):
+    w,h = img.size
+    new_h = int(h * (width / w))
+    img2 = img.resize((width,new_h), Image.Resampling.LANCZOS)
+    # 見た目だけ2倍
+    img2 = img2.resize((width*2,new_h*2), Image.Resampling.LANCZOS)
+    return img2
 
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
@@ -142,24 +128,21 @@ for f in list_image_files(FOLDER_ID):
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-
-    # Google Driveにサムネイル保存
     img = pil_open_safe(file_bytes, f['mimeType'])
-    thumb_link = save_to_drive(create_thumbnail(img), f"{f['name']}_thumb.png", FOLDER_ID)
-
+    thumb_link = save_to_drive(create_thumbnail(img), f"{f['name']}_thumb.png")
+    popup_link = save_to_drive(create_popup(img), f"{f['name']}_popup.png")
     row = {
         'filename': f['name'],
         'latitude': lat,
         'longitude': lon,
         'datetime': dt,
         'file_id': f['id'],
-        'mime_type': f['mimeType'],
-        'thumb_link': thumb_link
+        'thumb_link': thumb_link,
+        'popup_link': popup_link
     }
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ更新
 with open(CACHE_FILE,'w') as f:
     json.dump(cached_files,f)
 
@@ -169,7 +152,7 @@ df = pd.DataFrame(rows)
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
-    "<style>#map { height: 100vh; width: 100%; } img { max-width:100%; height:auto; }</style>",
+    "<style>#map { height: 100vh; width: 100%; }</style>",
     "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>",
     "<div id='map'></div><script>",
@@ -179,17 +162,13 @@ html_lines = [
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
-        file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
-        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], scale=2)
-        if icon_data_uri and popup_data_uri:
-            html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [54,54]}}); 
+        html_lines.append(f"""
+var icon = L.icon({{iconUrl: '{row['thumb_link']}', iconSize: [25,25]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}' width='400'/>");
++ "<img src='{row['popup_link']}' style='max-width:100%;height:auto;'/>");
 """)
 
 html_lines.append("""
@@ -200,7 +179,7 @@ map.on('zoomend', function(){
         var img = m.getElement().querySelector('img');
         if(img){
             var size = 25 * scale;
-            if(size>54){ size=54; }
+            if(size>50){ size=50; }
             img.style.width = size + 'px';
             img.style.height = size + 'px';
         }
@@ -221,5 +200,6 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
 
 
