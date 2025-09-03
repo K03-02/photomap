@@ -2,7 +2,6 @@
 import os
 import io
 import json
-import base64
 import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
@@ -20,6 +19,7 @@ REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
 CACHE_FILE = 'photomap_cache.json'
+IMAGES_DIR = 'images'  # GitHub内の画像フォルダ
 
 # ===== Google Drive 認証 =====
 service_account_info = json.loads(base64.b64decode(os.environ['SERVICE_ACCOUNT_B64']))
@@ -43,7 +43,7 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-def pil_open_safe(file_bytes, mime_type):
+def pil_open_safe(file_bytes):
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode not in ("RGB", "RGBA"):
@@ -53,7 +53,7 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-def extract_exif(file_bytes, mime_type):
+def extract_exif(file_bytes):
     lat = lon = dt = ''
     try:
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
@@ -71,39 +71,27 @@ def extract_exif(file_bytes, mime_type):
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
     except:
-        print(f"⚠️ EXIF not found for {mime_type}")
+        print(f"⚠️ EXIF not found")
     return lat, lon, dt
 
-# ===== サムネイル生成（縁取り丸） =====
-def heic_to_base64_circle(file_bytes, mime_type, size=50):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
-    # サムネイルは元サイズの半分に縮小
-    w, h = img.size
-    img = img.resize((w//2, h//2))
-    # 円形マスク
-    mask = Image.new("L", img.size, 0)
+def create_thumbnail_with_frame(img, size=50):
+    """丸く切り抜き＋ピン風フレーム"""
+    img_thumb = img.copy()
+    img_thumb.thumbnail((size,size))
+    # マスク作成
+    mask = Image.new("L", img_thumb.size, 0)
     draw = ImageDraw.Draw(mask)
-    draw.ellipse((0, 0, img.size[0], img.size[1]), fill=255)
-    img.putalpha(mask)
-    # 白い縁取り
-    border_size = max(2, img.size[0]//15)
-    bordered = Image.new("RGBA", (img.size[0]+border_size*2, img.size[1]+border_size*2), (255,255,255,0))
-    bordered.paste(img, (border_size, border_size), mask=img)
+    draw.ellipse((0,0,img_thumb.size[0],img_thumb.size[1]), fill=255)
+    img_thumb.putalpha(mask)
+    # 枠作成
+    frame = Image.new("RGBA", (size, size), (0,0,0,0))
+    frame_draw = ImageDraw.Draw(frame)
+    frame_draw.ellipse((0,0,size-1,size-1), outline=(255,0,0,255), width=3)  # 赤い枠
+    frame.paste(img_thumb, (0,0), mask=img_thumb)
+    # 保存
     buf = io.BytesIO()
-    bordered.save(buf, format='PNG')
-    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
-
-# ===== ポップアップ画像（見た目4倍） =====
-def heic_to_base64_popup(file_bytes, mime_type, width=200):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
-    w, h = img.size
-    new_h = int(h * (width / w))
-    img = img.resize((width, new_h))
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    frame.save(buf, format='PNG')
+    return buf.getvalue()
 
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
@@ -119,14 +107,13 @@ for f in list_image_files(FOLDER_ID):
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
-    lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
+    lat, lon, dt = extract_exif(file_bytes)
     row = {
         'filename': f['name'],
         'latitude': lat,
         'longitude': lon,
         'datetime': dt,
-        'file_id': f['id'],
-        'mime_type': f['mimeType']
+        'file_id': f['id']
     }
     rows.append(row)
     cached_files[f['id']] = row
@@ -136,21 +123,41 @@ with open(CACHE_FILE,'w') as f:
 
 df = pd.DataFrame(rows)
 
+# ===== GitHub更新準備 =====
+g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
+repo = g.get_repo(REPO_NAME)
+
+# imagesフォルダ作成
+try:
+    repo.get_contents(IMAGES_DIR, ref=BRANCH_NAME)
+except:
+    repo.create_file(f"{IMAGES_DIR}/.gitkeep", "create images dir", "", branch=BRANCH_NAME)
+
+# 新規画像アップロード（サムネイル＋ポップアップ）
+for _, row in df.iterrows():
+    base_name = row['filename'].rsplit('.',1)[0] + '.png'
+    remote_path = f"{IMAGES_DIR}/{base_name}"
+    try:
+        repo.get_contents(remote_path, ref=BRANCH_NAME)
+        continue
+    except:
+        file_bytes = get_file_bytes(row['file_id'])
+        img = pil_open_safe(file_bytes)
+        if img is None: continue
+        thumb_bytes = create_thumbnail_with_frame(img, size=50)  # サムネイル
+        repo.create_file(remote_path, f"upload {base_name}", thumb_bytes, branch=BRANCH_NAME)
+
 # ===== HTML生成 =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
-    "<style>#map { height: 100vh; width: 100%; }</style>",
-    "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
-    "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>",
     "<style>",
-    ".leaflet-popup-content img {",
-    "  display: block; margin:auto;",
-    "  transform: scale(4); transform-origin: top left;",
-    "  max-width:25%; height:auto;",
-    "}",
+    "#map { height: 100vh; width: 100%; }",
+    "img.popup-img { width: 200%; max-width: none; }",  # ポップアップで2倍表示
+    ".circle-icon img { border-radius:50%; border:2px solid red; }",
     "</style>",
-    "</head><body>",
+    "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
+    "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script></head><body>",
     "<div id='map'></div><script>",
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
@@ -158,30 +165,41 @@ html_lines = [
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
-        file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'], size=50)
-        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
-        if icon_data_uri and popup_data_uri:
-            html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [100,100]}}); 
+        img_name = row['filename'].rsplit('.',1)[0]+'.png'
+        img_url = f"https://raw.githubusercontent.com/{REPO_NAME}/main/{IMAGES_DIR}/{img_name}"
+        html_lines.append(f"""
+var icon = L.icon({{iconUrl:'{img_url}', iconSize:[50,50], className:'circle-icon'}});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}'/>");
++ "<img class='popup-img' src='{img_url}'/>");
 """)
 
-html_str = "\n".join(html_lines + ["</script></body></html>"])
+html_lines.append("""
+map.on('zoomend', function(){
+    var zoom = map.getZoom();
+    var scale = Math.min(zoom/5, 1.2);
+    markers.forEach(function(m){
+        var img = m.getElement().querySelector('img');
+        if(img){
+            var size = 50 * scale;
+            if(size>60){ size=60; }
+            img.style.width = size + 'px';
+            img.style.height = size + 'px';
+        }
+    });
+});
+</script></body></html>
+""")
 
-# ===== GitHub更新 =====
-g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
-repo = g.get_repo(REPO_NAME)
+html_str = "\n".join(html_lines)
 
+# ===== GitHub HTML更新 =====
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML with popup 4x", html_str, contents.sha, branch=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML with framed thumbnails", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
