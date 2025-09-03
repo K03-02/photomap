@@ -148,7 +148,7 @@ for _, row in df.iterrows():
         popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [100,100]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
