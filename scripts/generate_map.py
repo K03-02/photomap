@@ -132,7 +132,7 @@ html_lines = [
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>",
     "<style>",
     ".custom-pin .pin {",
-    "  width: 120px; height: 120px;",  # サムネイル 2倍
+    "  width: 120px; height: 120px;",
     "  border: 4px solid #fff;",
     "  border-radius: 50%;",
     "  box-shadow: 0 0 8px rgba(0,0,0,0.5);",
@@ -143,8 +143,8 @@ html_lines = [
     "}",
     ".leaflet-popup-content img {",
     "  display: block; margin:auto;",
-    "  transform: scale(2); transform-origin: top left;",  # ポップアップ2倍
-    "  max-width:50%; height:auto;",  # 枠内に収める
+    "  transform: scale(4); transform-origin: top left;",  # ポップアップ4倍
+    "  max-width:25%; height:auto;",                        # 枠内に収める
     "}",
     "</style>",
     "</head><body>",
@@ -152,30 +152,6 @@ html_lines = [
     "var map = L.map('map').setView([35.0, 138.0], 5);",
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
     "var markers = [];"]
-
-for _, row in df.iterrows():
-    if row['latitude'] and row['longitude']:
-        file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = image_to_base64(file_bytes, row['mime_type'])
-        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=600)
-        if icon_data_uri and popup_data_uri:
-            html_lines.append(f"""
-var pinIcon = L.divIcon({{
-    className: "custom-pin",
-    html: `<div class="pin"><img src='{icon_data_uri}'/></div>`,
-    iconSize: [120, 120],
-    iconAnchor: [60, 120]
-}});
-var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: pinIcon}}).addTo(map);
-markers.push(marker);
-marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
-+ "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data_uri}'/>");
-""")
-
-html_lines.append("</script></body></html>")
-
-html_str = "\n".join(html_lines)
 
 # ===== GitHub更新 =====
 g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
