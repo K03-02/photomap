@@ -4,7 +4,7 @@ import io
 import json
 import base64
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
@@ -74,15 +74,28 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-def image_to_base64(file_bytes, mime_type, size=120):  # サムネイルサイズ
+# ===== サムネイル生成（縁取り丸） =====
+def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
-    img = img.resize((size, size))
+    # サムネイルは元サイズの半分に縮小
+    w, h = img.size
+    img = img.resize((w//2, h//2))
+    # 円形マスク
+    mask = Image.new("L", img.size, 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, img.size[0], img.size[1]), fill=255)
+    img.putalpha(mask)
+    # 白い縁取り
+    border_size = max(2, img.size[0]//15)
+    bordered = Image.new("RGBA", (img.size[0]+border_size*2, img.size[1]+border_size*2), (255,255,255,0))
+    bordered.paste(img, (border_size, border_size), mask=img)
     buf = io.BytesIO()
-    img.save(buf, format='PNG')
+    bordered.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def heic_to_base64_popup(file_bytes, mime_type, width=600):  # ポップアップ画像
+# ===== ポップアップ画像（見た目4倍） =====
+def heic_to_base64_popup(file_bytes, mime_type, width=200):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
     w, h = img.size
@@ -131,20 +144,10 @@ html_lines = [
     "<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>",
     "<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>",
     "<style>",
-    ".custom-pin .pin {",
-    "  width: 120px; height: 120px;",
-    "  border: 4px solid #fff;",
-    "  border-radius: 50%;",
-    "  box-shadow: 0 0 8px rgba(0,0,0,0.5);",
-    "  overflow: hidden;",
-    "}",
-    ".custom-pin .pin img {",
-    "  width: 100%; height: 100%; object-fit: cover;",
-    "}",
     ".leaflet-popup-content img {",
     "  display: block; margin:auto;",
-    "  transform: scale(4); transform-origin: top left;",  # ポップアップ4倍
-    "  max-width:25%; height:auto;",                        # 枠内に収める
+    "  transform: scale(4); transform-origin: top left;",
+    "  max-width:25%; height:auto;",
     "}",
     "</style>",
     "</head><body>",
@@ -153,12 +156,30 @@ html_lines = [
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
     "var markers = [];"]
 
+for _, row in df.iterrows():
+    if row['latitude'] and row['longitude']:
+        file_bytes = get_file_bytes(row['file_id'])
+        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'], size=50)
+        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
+        if icon_data_uri and popup_data_uri:
+            html_lines.append(f"""
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [100,100]}}); 
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
+markers.push(marker);
+marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
++ "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
++ "<img src='{popup_data_uri}'/>");
+""")
+
+html_str = "\n".join(html_lines + ["</script></body></html>"])
+
 # ===== GitHub更新 =====
 g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
 repo = g.get_repo(REPO_NAME)
+
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML with popup 2x", html_str, contents.sha, branch=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML with popup 4x", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
