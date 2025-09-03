@@ -12,11 +12,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-register_heif_opener()  # HEIC対応
+register_heif_opener()
 
 # ===== 設定 =====
-FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
-SHARED_DRIVE_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # ← ここに作った共有ドライブIDを入れる
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # Google Drive 共有ドライブ
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
@@ -25,7 +24,8 @@ CACHE_FILE = 'photomap_cache.json'
 # ===== Google Drive 認証 =====
 service_account_info = json.loads(base64.b64decode(os.environ['SERVICE_ACCOUNT_B64']))
 credentials = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=["https://www.googleapis.com/auth/drive"]
+    service_account_info,
+    scopes=["https://www.googleapis.com/auth/drive"]
 )
 drive_service = build('drive', 'v3', credentials=credentials)
 
@@ -38,14 +38,13 @@ def list_image_files(folder_id):
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
-    from googleapiclient.http import MediaIoBaseDownload
-    downloader = MediaIoBaseDownload(fh, request)
     done = False
+    downloader = MediaIoBaseDownload(fh, request)
     while not done:
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-def pil_open_safe(file_bytes, mime_type):
+def pil_open_safe(file_bytes):
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode not in ("RGB", "RGBA"):
@@ -55,7 +54,7 @@ def pil_open_safe(file_bytes, mime_type):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-def extract_exif(file_bytes, mime_type):
+def extract_exif(file_bytes):
     lat = lon = dt = ''
     try:
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
@@ -73,45 +72,45 @@ def extract_exif(file_bytes, mime_type):
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
     except:
-        print(f"⚠️ EXIF not found for {mime_type}")
+        print(f"⚠️ EXIF not found")
     return lat, lon, dt
 
-# ===== 共有ドライブアップロード =====
-def save_to_drive(img, name):
+# サムネイル作成（丸く縁取り）
+def create_thumbnail(img, size=50):
+    img = img.copy()
+    img.thumbnail((size, size), Image.LANCZOS)
+    mask = Image.new("L", img.size, 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, img.size[0], img.size[1]), fill=255)
+    img.putalpha(mask)
+    # 白い縁
+    border = Image.new("RGBA", (img.size[0]+4, img.size[1]+4), (255,255,255,0))
+    border.paste(img, (2,2), img)
+    return border
+
+# ポップアップ画像作成（見た目拡大のみ）
+def create_popup(img, display_scale=2.0):
+    img = img.copy()
+    w,h = img.size
+    new_w, new_h = int(w*display_scale), int(h*display_scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    return img
+
+# Driveにアップロードして共有リンクを取得
+def save_to_drive(img, filename):
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     buf.seek(0)
-    media = MediaIoBaseUpload(buf, mimetype='image/png', resumable=True)
     file_metadata = {
-        'name': name,
-        'parents': [SHARED_DRIVE_ID]
+        'name': filename,
+        'parents': [FOLDER_ID]
     }
-    uploaded = drive_service.files().create(body=file_metadata, media_body=media, supportsAllDrives=True).execute()
-    return f"https://drive.google.com/uc?id={uploaded['id']}"
-
-# ===== サムネイル作成 =====
-def create_thumbnail(img, size=50):
-    img = img.copy()
-    img.thumbnail((size, size), Image.Resampling.LANCZOS)
-    # 白丸縁
-    mask = Image.new("L", img.size, 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,img.size[0]-1,img.size[1]-1), fill=255)
-    img.putalpha(mask)
-    border = Image.new("RGBA", img.size, (255,255,255,0))
-    draw_border = ImageDraw.Draw(border)
-    draw_border.ellipse((0,0,img.size[0]-1,img.size[1]-1), outline=(255,255,255,255), width=4)
-    border.paste(img, (0,0), mask=img)
-    return border
-
-# ===== ポップアップ画像作成 =====
-def create_popup(img, width=200):
-    w,h = img.size
-    new_h = int(h * (width / w))
-    img2 = img.resize((width,new_h), Image.Resampling.LANCZOS)
-    # 見た目だけ2倍
-    img2 = img2.resize((width*2,new_h*2), Image.Resampling.LANCZOS)
-    return img2
+    media = MediaIoBaseUpload(buf, mimetype='image/png')
+    uploaded = drive_service.files().create(body=file_metadata, media_body=media, supportsAllDrives=True, fields='id, webContentLink').execute()
+    file_id = uploaded['id']
+    # 公開リンク
+    drive_service.permissions().create(fileId=file_id, body={"type":"anyone","role":"reader"}, supportsAllDrives=True).execute()
+    return f"https://drive.google.com/uc?id={file_id}"
 
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
@@ -127,16 +126,17 @@ for f in list_image_files(FOLDER_ID):
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
-    lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-    img = pil_open_safe(file_bytes, f['mimeType'])
+    lat, lon, dt = extract_exif(file_bytes)
+    img = pil_open_safe(file_bytes)
+    if img is None:
+        continue
     thumb_link = save_to_drive(create_thumbnail(img), f"{f['name']}_thumb.png")
-    popup_link = save_to_drive(create_popup(img), f"{f['name']}_popup.png")
+    popup_link = save_to_drive(create_popup(img, display_scale=2.0), f"{f['name']}_popup.png")
     row = {
         'filename': f['name'],
         'latitude': lat,
         'longitude': lon,
         'datetime': dt,
-        'file_id': f['id'],
         'thumb_link': thumb_link,
         'popup_link': popup_link
     }
@@ -163,31 +163,15 @@ html_lines = [
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{row['thumb_link']}', iconSize: [25,25]}}); 
+var icon = L.icon({{iconUrl: '{row['thumb_link']}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['popup_link']}' style='max-width:100%;height:auto;'/>");
++ "<img src='{row['popup_link']}' style='max-width:100%; height:auto;'/>");
 """)
 
-html_lines.append("""
-map.on('zoomend', function(){
-    var zoom = map.getZoom();
-    var scale = Math.min(zoom/5, 1.2);
-    markers.forEach(function(m){
-        var img = m.getElement().querySelector('img');
-        if(img){
-            var size = 25 * scale;
-            if(size>50){ size=50; }
-            img.style.width = size + 'px';
-            img.style.height = size + 'px';
-        }
-    });
-});
-""")
 html_lines.append("</script></body></html>")
-
 html_str = "\n".join(html_lines)
 
 # ===== GitHub更新 =====
@@ -195,11 +179,8 @@ g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
 repo = g.get_repo(REPO_NAME)
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML with new images", html_str, contents.sha, branch=BRANCH_NAME)
+    repo.update_file(HTML_NAME, "update HTML with Drive images", html_str, contents.sha, branch=BRANCH_NAME)
     print("HTML updated on GitHub.")
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
-
-
