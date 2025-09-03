@@ -86,7 +86,7 @@ def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def heic_to_base64_popup(file_bytes, mime_type, width=200):
+def heic_to_base64_popup(file_bytes, mime_type, width=400):
     img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
     w, h = img.size
