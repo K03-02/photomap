@@ -3,12 +3,13 @@ import os
 import io
 import json
 import base64
+import pickle
 import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
-from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
@@ -20,13 +21,19 @@ REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
 BRANCH_NAME = 'main'
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
 # ===== Google Drive 認証 =====
-service_account_info = json.loads(base64.b64decode(os.environ['SERVICE_ACCOUNT_B64']))
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info, scopes=["https://www.googleapis.com/auth/drive.readonly"]
-)
-drive_service = build('drive', 'v3', credentials=credentials)
+if os.path.exists("token.json"):
+    with open("token.json", "rb") as f:
+        creds = pickle.load(f)
+else:
+    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+    creds = flow.run_local_server(port=0)
+    with open("token.json", "wb") as f:
+        pickle.dump(creds, f)
+
+drive_service = build('drive', 'v3', credentials=creds)
 
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
@@ -89,9 +96,9 @@ def to_base64_circle(file_bytes, size=50):
 def to_base64_popup(file_bytes, width=200):
     img = pil_open_safe(file_bytes)
     if img is None: return None
-    w, h = img.size
-    new_h = int(h * (width / w))
-    img = img.resize((width, new_h))
+    w,h = img.size
+    new_h = int(h*(width/w))
+    img = img.resize((width,new_h))
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
@@ -105,14 +112,12 @@ else:
 
 rows = []
 for f in list_image_files(FOLDER_ID):
-    # HEIC or JPEG のみ処理
-    if f['mimeType'] not in ['image/heic', 'image/jpeg']:
+    # PNG は Drive にアップロードした生成済みなのでスキップ
+    if f['name'].lower().endswith('.png'):
         continue
-
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
-
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes)
@@ -121,7 +126,8 @@ for f in list_image_files(FOLDER_ID):
         'latitude': lat,
         'longitude': lon,
         'datetime': dt,
-        'file_bytes': file_bytes
+        'file_id': f['id'],
+        'mime_type': f['mimeType']
     }
     rows.append(row)
     cached_files[f['id']] = row
@@ -146,16 +152,17 @@ html_lines = [
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
-        icon_data = to_base64_circle(row['file_bytes'])
-        popup_data = to_base64_popup(row['file_bytes'], width=200)
-        if icon_data and popup_data:
+        file_bytes = get_file_bytes(row['file_id'])
+        icon_data_uri = to_base64_circle(file_bytes)
+        popup_data_uri = to_base64_popup(file_bytes, width=200)
+        if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{icon_data}', iconSize: [50,50]}}); 
+var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{popup_data}' width='200'/>");
++ "<img src='{popup_data_uri}' width='200'/>");
 """)
 
 html_lines.append("""
@@ -174,7 +181,6 @@ map.on('zoomend', function(){
 });
 """)
 html_lines.append("</script></body></html>")
-
 html_str = "\n".join(html_lines)
 
 # ===== GitHub更新 =====
@@ -189,3 +195,12 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
+
+# キャッシュ永続化（GitHub）
+try:
+    contents = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
+    repo.update_file(CACHE_FILE, "update photomap cache", json.dumps(cached_files), contents.sha, branch=BRANCH_NAME)
+    print("Cache updated on GitHub.")
+except:
+    repo.create_file(CACHE_FILE, "create photomap cache", json.dumps(cached_files), branch=BRANCH_NAME)
+    print("Cache created on GitHub.")
