@@ -3,7 +3,6 @@ import os
 import io
 import json
 import base64
-import requests
 import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
@@ -22,24 +21,16 @@ HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
 BRANCH_NAME = 'main'
 
-# ===== Google Drive 認証（OAuth refresh token 方式） =====
+# ===== Google Drive 認証（ユーザー認証版） =====
 token_info = json.loads(base64.b64decode(os.environ['USER_OAUTH_B64']))
-
-def refresh_access_token(token_info):
-    data = {
-        'client_id': token_info['client_id'],
-        'client_secret': token_info['client_secret'],
-        'refresh_token': token_info['refresh_token'],
-        'grant_type': 'refresh_token'
-    }
-    r = requests.post(token_info['token_uri'], data=data)
-    r.raise_for_status()
-    new_token = r.json()['access_token']
-    token_info['token'] = new_token
-    return new_token
-
-access_token = refresh_access_token(token_info)
-creds = Credentials(token=access_token)
+creds = Credentials(
+    token=token_info['token'],
+    refresh_token=token_info.get('refresh_token'),
+    token_uri=token_info['token_uri'],
+    client_id=token_info.get('client_id'),
+    client_secret=token_info.get('client_secret'),
+    scopes=token_info.get('scopes', ["https://www.googleapis.com/auth/drive"])
+)
 drive_service = build('drive', 'v3', credentials=creds)
 
 # ===== ヘルパー関数 =====
@@ -88,9 +79,7 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-def heic_to_base64_circle(file_bytes, mime_type, size=50):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
+def pil_to_base64_circle(img, size=50):
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask)
@@ -100,9 +89,7 @@ def heic_to_base64_circle(file_bytes, mime_type, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def heic_to_base64_popup(file_bytes, mime_type, width=200):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None: return None
+def pil_to_base64_popup(img, width=200):
     w, h = img.size
     new_h = int(h * (width / w))
     img = img.resize((width, new_h))
@@ -119,13 +106,14 @@ else:
 
 rows = []
 for f in list_image_files(FOLDER_ID):
+    # 新しい画像だけ処理
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
-    # PNG はスキップ、HEIC/JPEG のみ処理
-    if f['mimeType'] not in ['image/heic', 'image/jpeg', 'image/jpg']:
+    img = pil_open_safe(file_bytes, f['mimeType'])
+    if img is None:
         print(f"⚠️ Skipping non-supported file: {f['name']}")
         continue
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
@@ -135,10 +123,11 @@ for f in list_image_files(FOLDER_ID):
         'longitude': lon,
         'datetime': dt,
         'file_id': f['id'],
-        'mime_type': f['mimeType']
+        'mime_type': f['mimeType'],
+        'img_obj': img
     }
     rows.append(row)
-    cached_files[f['id']] = row
+    cached_files[f['id']] = row  # 新規キャッシュ追加
 
 # キャッシュ更新（ローカル）
 with open(CACHE_FILE,'w') as f:
@@ -160,11 +149,9 @@ html_lines = [
 
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
-        file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
-        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
-        if icon_data_uri and popup_data_uri:
-            html_lines.append(f"""
+        icon_data_uri = pil_to_base64_circle(row['img_obj'])
+        popup_data_uri = pil_to_base64_popup(row['img_obj'], width=200)
+        html_lines.append(f"""
 var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
