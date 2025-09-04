@@ -1,17 +1,16 @@
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 import os
 import io
 import json
 import base64
-import pickle
 import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+from google.oauth2.credentials import Credentials  # <- ここを追加
 
 register_heif_opener()  # HEIC対応
 
@@ -21,21 +20,15 @@ REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
 BRANCH_NAME = 'main'
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
-# ===== Google Drive 認証 =====
-if os.path.exists("token.json"):
-    with open("token.json", "rb") as f:
-        creds = pickle.load(f)
-else:
-    flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
-    creds = flow.run_local_server(port=0)
-    with open("token.json", "wb") as f:
-        pickle.dump(creds, f)
+# ===== Google Drive 認証（ユーザー OAuth 用） =====
+token_info = json.loads(base64.b64decode(os.environ['USER_OAUTH_B64']))
+credentials = Credentials.from_authorized_user_info(
+    token_info, scopes=["https://www.googleapis.com/auth/drive"]
+)
+drive_service = build('drive', 'v3', credentials=credentials)
 
-drive_service = build('drive', 'v3', credentials=creds)
-
-# ===== ヘルパー関数 =====
+# ===== 以下、以前のスクリプトと同じ =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
     results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
@@ -50,7 +43,7 @@ def get_file_bytes(file_id):
         _, done = downloader.next_chunk()
     return fh.getvalue()
 
-def pil_open_safe(file_bytes):
+def pil_open_safe(file_bytes, mime_type):
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode not in ("RGB", "RGBA"):
@@ -60,7 +53,7 @@ def pil_open_safe(file_bytes):
         print(f"⚠️ Cannot open image: {e}")
         return None
 
-def extract_exif(file_bytes):
+def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
@@ -78,11 +71,11 @@ def extract_exif(file_bytes):
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
     except:
-        print("⚠️ EXIF not found")
+        print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-def to_base64_circle(file_bytes, size=50):
-    img = pil_open_safe(file_bytes)
+def heic_to_base64_circle(file_bytes, mime_type, size=50):
+    img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
     img = img.resize((size, size))
     mask = Image.new("L", (size, size), 0)
@@ -93,12 +86,12 @@ def to_base64_circle(file_bytes, size=50):
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
-def to_base64_popup(file_bytes, width=200):
-    img = pil_open_safe(file_bytes)
+def heic_to_base64_popup(file_bytes, mime_type, width=200):
+    img = pil_open_safe(file_bytes, mime_type)
     if img is None: return None
-    w,h = img.size
-    new_h = int(h*(width/w))
-    img = img.resize((width,new_h))
+    w, h = img.size
+    new_h = int(h * (width / w))
+    img = img.resize((width, new_h))
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
@@ -112,15 +105,12 @@ else:
 
 rows = []
 for f in list_image_files(FOLDER_ID):
-    # PNG は Drive にアップロードした生成済みなのでスキップ
-    if f['name'].lower().endswith('.png'):
-        continue
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
-    lat, lon, dt = extract_exif(file_bytes)
+    lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
     row = {
         'filename': f['name'],
         'latitude': lat,
@@ -132,7 +122,6 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ更新
 with open(CACHE_FILE,'w') as f:
     json.dump(cached_files,f)
 
