@@ -1,16 +1,17 @@
-##!/usr/bin/env python3
+#!/usr/bin/env python3
 import os
 import io
 import json
 import base64
+import requests
 import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-from google.oauth2.credentials import Credentials  # <- ここを追加
 
 register_heif_opener()  # HEIC対応
 
@@ -21,14 +22,27 @@ HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
 BRANCH_NAME = 'main'
 
-# ===== Google Drive 認証（ユーザー OAuth 用） =====
+# ===== Google Drive 認証（OAuth refresh token 方式） =====
 token_info = json.loads(base64.b64decode(os.environ['USER_OAUTH_B64']))
-credentials = Credentials.from_authorized_user_info(
-    token_info, scopes=["https://www.googleapis.com/auth/drive"]
-)
-drive_service = build('drive', 'v3', credentials=credentials)
 
-# ===== 以下、以前のスクリプトと同じ =====
+def refresh_access_token(token_info):
+    data = {
+        'client_id': token_info['client_id'],
+        'client_secret': token_info['client_secret'],
+        'refresh_token': token_info['refresh_token'],
+        'grant_type': 'refresh_token'
+    }
+    r = requests.post(token_info['token_uri'], data=data)
+    r.raise_for_status()
+    new_token = r.json()['access_token']
+    token_info['token'] = new_token
+    return new_token
+
+access_token = refresh_access_token(token_info)
+creds = Credentials(token=access_token)
+drive_service = build('drive', 'v3', credentials=creds)
+
+# ===== ヘルパー関数 =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
     results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
@@ -110,6 +124,10 @@ for f in list_image_files(FOLDER_ID):
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
+    # PNG はスキップ、HEIC/JPEG のみ処理
+    if f['mimeType'] not in ['image/heic', 'image/jpeg', 'image/jpg']:
+        print(f"⚠️ Skipping non-supported file: {f['name']}")
+        continue
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
     row = {
         'filename': f['name'],
@@ -122,6 +140,7 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
+# キャッシュ更新（ローカル）
 with open(CACHE_FILE,'w') as f:
     json.dump(cached_files,f)
 
@@ -142,8 +161,8 @@ html_lines = [
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         file_bytes = get_file_bytes(row['file_id'])
-        icon_data_uri = to_base64_circle(file_bytes)
-        popup_data_uri = to_base64_popup(file_bytes, width=200)
+        icon_data_uri = heic_to_base64_circle(file_bytes, row['mime_type'])
+        popup_data_uri = heic_to_base64_popup(file_bytes, row['mime_type'], width=200)
         if icon_data_uri and popup_data_uri:
             html_lines.append(f"""
 var icon = L.icon({{iconUrl: '{icon_data_uri}', iconSize: [50,50]}}); 
@@ -170,6 +189,7 @@ map.on('zoomend', function(){
 });
 """)
 html_lines.append("</script></body></html>")
+
 html_str = "\n".join(html_lines)
 
 # ===== GitHub更新 =====
