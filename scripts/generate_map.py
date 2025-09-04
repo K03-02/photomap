@@ -8,26 +8,24 @@ from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
-from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload  # ← ここ追加
+from googleapiclient.http import MediaIoBaseUpload
 
 register_heif_opener()
 
 # ===== 設定 =====
-FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # Google Drive 共有ドライブ
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # Google Drive 共有フォルダ
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 BRANCH_NAME = 'main'
 CACHE_FILE = 'photomap_cache.json'
 
-# ===== Google Drive 認証 =====
-service_account_info = json.loads(base64.b64decode(os.environ['SERVICE_ACCOUNT_B64']))
-credentials = service_account.Credentials.from_service_account_info(
-    service_account_info,
-    scopes=["https://www.googleapis.com/auth/drive"]
-)
-drive_service = build('drive', 'v3', credentials=credentials)
+# ===== OAuth2 認証 =====
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+flow = InstalledAppFlow.from_client_secrets_file('client_id.json', SCOPES)
+creds = flow.run_local_server(port=0)
+drive_service = build('drive', 'v3', credentials=creds)
 
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
@@ -38,7 +36,10 @@ def list_image_files(folder_id):
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
-    downloader = MediaIoBaseDownload(fh, request)
+    downloader = MediaIoBaseUpload(fh, mimetype='image/png')  # HEICは直接扱えないので後でPILで変換
+    # 代わりにFiles().get()でダウンロード
+    from googleapiclient.http import MediaIoBaseDownload
+    downloader = MediaIoBaseDownload(fh, drive_service.files().get_media(fileId=file_id))
     done = False
     while not done:
         _, done = downloader.next_chunk()
@@ -93,23 +94,18 @@ def create_popup(img, display_scale=2.0):
     img = img.copy()
     w,h = img.size
     new_w, new_h = int(w*display_scale), int(h*display_scale)
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    return img
+    return img.resize((new_w,new_h), Image.LANCZOS)
 
 # Driveにアップロードして共有リンクを取得
 def save_to_drive(img, filename):
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     buf.seek(0)
-    file_metadata = {
-        'name': filename,
-        'parents': [FOLDER_ID]
-    }
+    file_metadata = {'name': filename, 'parents':[FOLDER_ID]}
     media = MediaIoBaseUpload(buf, mimetype='image/png')
-    uploaded = drive_service.files().create(body=file_metadata, media_body=media, supportsAllDrives=True, fields='id').execute()
+    uploaded = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
     file_id = uploaded['id']
-    # 公開リンク
-    drive_service.permissions().create(fileId=file_id, body={"type":"anyone","role":"reader"}, supportsAllDrives=True).execute()
+    drive_service.permissions().create(fileId=file_id, body={"type":"anyone","role":"reader"}).execute()
     return f"https://drive.google.com/uc?id={file_id}"
 
 # ===== キャッシュ読み込み =====
@@ -126,10 +122,10 @@ for f in list_image_files(FOLDER_ID):
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
-    lat, lon, dt = extract_exif(file_bytes)
     img = pil_open_safe(file_bytes)
     if img is None:
         continue
+    lat, lon, dt = extract_exif(file_bytes)
     thumb_link = save_to_drive(create_thumbnail(img), f"{f['name']}_thumb.png")
     popup_link = save_to_drive(create_popup(img, display_scale=2.0), f"{f['name']}_popup.png")
     row = {
@@ -184,4 +180,3 @@ try:
 except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
-
