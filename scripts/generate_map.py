@@ -4,7 +4,7 @@ import io
 import json
 import base64
 import pandas as pd
-from PIL import Image, ImageDraw
+from PIL import Image
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
@@ -14,8 +14,7 @@ from googleapiclient.discovery import build
 register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
-FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # 元写真フォルダ
-PNG_UPLOAD_FOLDER_ID = '15UUPKFqrXl2TZBhVTVqOQuZxchEYawGE'  # PNGフォルダ
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
@@ -36,16 +35,8 @@ drive_service = build('drive', 'v3', credentials=creds)
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
-    results = drive_service.files().list(q=query, fields="files(id, name, mimeType, webViewLink)").execute()
+    results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
     return results.get('files', [])
-
-def get_file_url_by_name(files, name):
-    for f in files:
-        if f['name'] == name:
-            # Google Drive の共有リンク形式で埋め込み
-            file_id = f['id']
-            return f"https://drive.google.com/uc?export=view&id={file_id}"
-    return None
 
 def extract_exif(file_bytes):
     lat = lon = dt = ''
@@ -68,6 +59,19 @@ def extract_exif(file_bytes):
         print(f"⚠️ EXIF not found")
     return lat, lon, dt
 
+def heic_to_jpeg(file_bytes):
+    with Image.open(io.BytesIO(file_bytes)) as im:
+        with io.BytesIO() as out_buf:
+            im.convert('RGB').save(out_buf, format='JPEG', quality=90)
+            return out_buf.getvalue()
+
+def upload_to_github(repo, branch, path, file_bytes, commit_msg):
+    try:
+        contents = repo.get_contents(path, ref=branch)
+        repo.update_file(path, commit_msg, file_bytes, contents.sha, branch=branch)
+    except:
+        repo.create_file(path, commit_msg, file_bytes, branch=branch)
+
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE,'r') as f:
@@ -75,8 +79,9 @@ if os.path.exists(CACHE_FILE):
 else:
     cached_files = {}
 
-# PNGフォルダ一覧
-png_files = list_image_files(PNG_UPLOAD_FOLDER_ID)
+# ===== GitHub認証 =====
+g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
+repo = g.get_repo(REPO_NAME)
 
 rows = []
 for f in list_image_files(FOLDER_ID):
@@ -86,13 +91,24 @@ for f in list_image_files(FOLDER_ID):
     print(f"Processing new file: {f['name']}...")
     file_bytes = drive_service.files().get_media(fileId=f['id']).execute()
     lat, lon, dt = extract_exif(file_bytes)
-    png_url = get_file_url_by_name(png_files, f['name'] + ".png")
+    
+    # HEIC → JPEG変換
+    jpeg_bytes = heic_to_jpeg(file_bytes)
+    jpeg_name = f['name'].replace('.HEIC','.jpg')
+    jpeg_path = f"images/{jpeg_name}"
+    
+    # GitHubにアップロード
+    upload_to_github(repo, BRANCH_NAME, jpeg_path, jpeg_bytes, f"Upload {jpeg_path}")
+    
+    # GitHub Pages URL
+    jpeg_url = f"https://{os.environ['GITHUB_USER']}.github.io/photomap/{jpeg_path}"
+    
     row = {
         'filename': f['name'],
         'latitude': lat,
         'longitude': lon,
         'datetime': dt,
-        'png_url': png_url
+        'jpeg_url': jpeg_url
     }
     rows.append(row)
     cached_files[f['id']] = row
@@ -116,22 +132,20 @@ html_lines = [
     "var markers = [];"]
 
 for _, row in df.iterrows():
-    if row['latitude'] and row['longitude'] and row['png_url']:
+    if row['latitude'] and row['longitude'] and row['jpeg_url']:
         html_lines.append(f"""
 var marker = L.marker([{row['latitude']},{row['longitude']}]).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['png_url']}' width='200'/>");
++ "<img src='{row['jpeg_url']}' width='200'/>");
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
 
-# ===== GitHub更新 =====
-g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
-repo = g.get_repo(REPO_NAME)
+# ===== HTML更新 =====
 try:
     contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
     repo.update_file(HTML_NAME, "update HTML with new images", html_str, contents.sha, branch=BRANCH_NAME)
