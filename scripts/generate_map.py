@@ -72,7 +72,7 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-def create_popup_jpeg(image, size=400):
+def create_popup_jpeg(image, size=600):
     w, h = image.size
     if w > h:
         new_w = size
@@ -97,10 +97,15 @@ def create_icon_jpeg(image, size=240, border_size=8):
     canvas_size = size + border_size*2
     result = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))  # 白背景
 
+    # 写真を丸く切り抜き
     mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,size,size), fill=255)
+    draw_mask = ImageDraw.Draw(mask)
+    draw_mask.ellipse((0,0,size,size), fill=255)
     result.paste(image, (border_size,border_size), mask)
+
+    # 白い円の枠を描く
+    draw = ImageDraw.Draw(result)
+    draw.ellipse((0,0,canvas_size,canvas_size), outline=(255,255,255), width=border_size)
 
     with io.BytesIO() as output:
         result.save(output, "JPEG", quality=90)
@@ -134,7 +139,7 @@ for f in list_image_files(FOLDER_ID):
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.jpg"
 
     # GitHubにアップロード
-    popup_bytes = create_popup_jpeg(image, 400)
+    popup_bytes = create_popup_jpeg(image, 600)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
     icon_bytes = create_icon_jpeg(image, 240, 8)
@@ -177,11 +182,11 @@ var icon = L.icon({{
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['popup_url']}' style='max-width:400px; height:auto;'/>");
++ "<img src='{row['popup_url']}' style='max-width:600px; width:100%; height:auto;'/>");
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML")
-print("HTML updated on GitHub with images, icons, and cache.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with larger popup and round icons")
+print("HTML updated on GitHub with improved icons and popups.")
