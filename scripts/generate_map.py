@@ -67,7 +67,8 @@ def create_popup_jpeg(image, size=400):
     else:
         new_h = size
         new_w = int(w * size / h)
-    return image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    return resized.convert("RGB")  # RGBA → RGB に変換
 
 def create_icon_jpeg(image, size=240, border_size=8):
     # 正方形トリミング（中央で切り抜き）
@@ -101,7 +102,7 @@ def create_icon_jpeg(image, size=240, border_size=8):
     draw.ellipse((0, 0, size, size), fill=255)
     result.paste(image, (border_size, border_size), mask_photo)
 
-    return result
+    return result.convert("RGB")  # RGBA → RGB に変換
 
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
