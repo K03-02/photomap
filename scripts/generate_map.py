@@ -10,7 +10,7 @@ import exifread
 from github import Github, Auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload
 
 register_heif_opener()  # HEIC対応
 
@@ -20,36 +20,42 @@ REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
 BRANCH_NAME = 'main'
-PNG_UPLOAD_FOLDER_ID = '15UUPKFqrXl2TZBhVTVqOQuZxchEYawGE'
 
 # ===== Google Drive 認証 =====
 token_info = json.loads(base64.b64decode(os.environ['USER_OAUTH_B64']))
-credentials = Credentials(
+creds = Credentials(
     token=token_info['token'],
     refresh_token=token_info.get('refresh_token'),
-    token_uri=token_info['token_uri'],
-    client_id=token_info['client_id'],
+    token_uri=token_info.get('token_uri'),
+    client_id=token_info.get('client_id'),
     client_secret=token_info.get('client_secret'),
-    scopes=["https://www.googleapis.com/auth/drive"]
+    scopes=token_info.get('scopes')
 )
-drive_service = build('drive', 'v3', credentials=credentials)
+drive_service = build('drive', 'v3', credentials=creds)
 
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
-    results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
+    results = drive_service.files().list(q=query, fields="files(id, name, mimeType, webViewLink)").execute()
     return results.get('files', [])
+
+def drive_direct_link(webViewLink):
+    """Google Driveの直接表示リンクに変換"""
+    if not webViewLink: return ''
+    import re
+    m = re.search(r'/d/([^/]+)', webViewLink)
+    if m:
+        return f'https://drive.google.com/uc?id={m.group(1)}'
+    return ''
 
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
-    downloader = MediaIoBaseUpload(fh, mimetype='application/octet-stream')  # 仮に作る
-    # ここは MediaIoBaseDownload に修正
-    from googleapiclient.http import MediaIoBaseDownload
-    downloader = MediaIoBaseDownload(fh, drive_service.files().get_media(fileId=file_id))
+    downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
         _, done = downloader.next_chunk()
+    fh.seek(0)
     return fh.getvalue()
 
 def pil_open_safe(file_bytes, mime_type):
@@ -83,26 +89,6 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-def convert_to_png(file_bytes, mime_type, size=None):
-    img = pil_open_safe(file_bytes, mime_type)
-    if img is None:
-        return None
-    if size:
-        img = img.resize(size)
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return buf.getvalue()
-
-def upload_png(file_bytes, filename):
-    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='image/png')
-    file_metadata = {'name': filename, 'parents': [PNG_UPLOAD_FOLDER_ID]}
-    uploaded_file = drive_service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id, webViewLink'
-    ).execute()
-    return uploaded_file['webViewLink']
-
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE,'r') as f:
@@ -112,19 +98,13 @@ else:
 
 rows = []
 for f in list_image_files(FOLDER_ID):
-    # 新しい画像だけ処理
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-    # PNGに変換してDriveにアップロード
-    png_bytes = convert_to_png(file_bytes, f['mimeType'])
-    if png_bytes:
-        png_url = upload_png(png_bytes, f['name'] + ".png")
-    else:
-        png_url = ''
+    png_url = drive_direct_link(f.get('webViewLink', ''))
     row = {
         'filename': f['name'],
         'latitude': lat,
@@ -135,7 +115,7 @@ for f in list_image_files(FOLDER_ID):
         'png_url': png_url
     }
     rows.append(row)
-    cached_files[f['id']] = row  # 新規キャッシュ追加
+    cached_files[f['id']] = row
 
 # キャッシュ更新（ローカル）
 with open(CACHE_FILE,'w') as f:
@@ -156,7 +136,7 @@ html_lines = [
     "var markers = [];"]
 
 for _, row in df.iterrows():
-    if row['latitude'] and row['longitude']:
+    if row['latitude'] and row['longitude'] and row['png_url']:
         html_lines.append(f"""
 var icon = L.icon({{iconUrl: '{row['png_url']}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
@@ -197,7 +177,6 @@ except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
 
-# キャッシュ永続化（GitHub）
 try:
     contents = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
     repo.update_file(CACHE_FILE, "update photomap cache", json.dumps(cached_files), contents.sha, branch=BRANCH_NAME)
