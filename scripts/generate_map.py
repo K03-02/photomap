@@ -18,7 +18,7 @@ register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'   # 元写真のフォルダ
-PNG_FOLDER_ID = 'アップロード用PNGフォルダID'  # PNG用フォルダ
+PNG_FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # PNG用フォルダ
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
@@ -75,16 +75,17 @@ def extract_exif(file_bytes):
         pass
     return lat, lon, dt
 
-def upload_png(file_bytes, name):
-    """Google Drive に PNG をアップロードして共有リンクを返す"""
+def upload_png(png_bytes, filename):
     file_metadata = {
-        'name': name,
-        'parents': [PNG_FOLDER_ID]
+        'name': filename,
+        'parents': [PNG_UPLOAD_FOLDER_ID]
     }
-    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='image/png')
-    file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-    # 共有リンク作成
-    drive_service.permissions().create(fileId=file['id'], body={'role':'reader','type':'anyone'}).execute()
+    media = MediaIoBaseUpload(io.BytesIO(png_bytes), mimetype='image/png')
+    file = drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields='id, webViewLink'
+    ).execute()
     return file['webViewLink']
 
 # ===== キャッシュ読み込み =====
