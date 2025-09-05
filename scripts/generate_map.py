@@ -10,12 +10,13 @@ import exifread
 from github import Github, Auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
-FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # 読み込み用
+PNG_UPLOAD_FOLDER_ID = '15UUPKFqrXl2TZBhVTVqOQuZxchEYawGE'  # アップロード用
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
@@ -25,28 +26,19 @@ BRANCH_NAME = 'main'
 token_info = json.loads(base64.b64decode(os.environ['USER_OAUTH_B64']))
 creds = Credentials(
     token=token_info['token'],
-    refresh_token=token_info.get('refresh_token'),
-    token_uri=token_info.get('token_uri'),
-    client_id=token_info.get('client_id'),
+    refresh_token=token_info['refresh_token'],
+    token_uri=token_info['token_uri'],
+    client_id=token_info['client_id'],
     client_secret=token_info.get('client_secret'),
-    scopes=token_info.get('scopes')
+    scopes=["https://www.googleapis.com/auth/drive"]
 )
 drive_service = build('drive', 'v3', credentials=creds)
 
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
     query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
-    results = drive_service.files().list(q=query, fields="files(id, name, mimeType, webViewLink)").execute()
+    results = drive_service.files().list(q=query, fields="files(id, name, mimeType)").execute()
     return results.get('files', [])
-
-def drive_direct_link(webViewLink):
-    """Google Driveの直接表示リンクに変換"""
-    if not webViewLink: return ''
-    import re
-    m = re.search(r'/d/([^/]+)', webViewLink)
-    if m:
-        return f'https://drive.google.com/uc?id={m.group(1)}'
-    return ''
 
 def get_file_bytes(file_id):
     fh = io.BytesIO()
@@ -55,10 +47,9 @@ def get_file_bytes(file_id):
     done = False
     while not done:
         _, done = downloader.next_chunk()
-    fh.seek(0)
     return fh.getvalue()
 
-def pil_open_safe(file_bytes, mime_type):
+def pil_open_safe(file_bytes, mime_type=None):
     try:
         img = Image.open(io.BytesIO(file_bytes))
         if img.mode not in ("RGB", "RGBA"):
@@ -89,6 +80,21 @@ def extract_exif(file_bytes, mime_type):
         print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
+def heic_to_png_bytes(file_bytes, size=(200,200)):
+    img = pil_open_safe(file_bytes)
+    if img is None:
+        return None
+    img = img.resize(size)
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return buf.getvalue()
+
+def upload_png(file_bytes, filename):
+    file_metadata = {'name': filename, 'parents': [PNG_UPLOAD_FOLDER_ID]}
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='image/png')
+    file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
+    return file.get('webViewLink')
+
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE,'r') as f:
@@ -104,7 +110,13 @@ for f in list_image_files(FOLDER_ID):
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
     lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
-    png_url = drive_direct_link(f.get('webViewLink', ''))
+    png_bytes = heic_to_png_bytes(file_bytes)
+    png_url = None
+    if png_bytes:
+        try:
+            png_url = upload_png(png_bytes, f['name'] + ".png")
+        except Exception as e:
+            print(f"⚠️ PNG upload failed: {e}")
     row = {
         'filename': f['name'],
         'latitude': lat,
@@ -117,7 +129,7 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ更新（ローカル）
+# キャッシュ更新
 with open(CACHE_FILE,'w') as f:
     json.dump(cached_files,f)
 
