@@ -10,29 +10,29 @@ import exifread
 from github import Github, Auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseUpload
 
 register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
-PNG_UPLOAD_FOLDER_ID = '15UUPKFqrXl2TZBhVTVqOQuZxchEYawGE'
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
 BRANCH_NAME = 'main'
+PNG_UPLOAD_FOLDER_ID = '15UUPKFqrXl2TZBhVTVqOQuZxchEYawGE'
 
 # ===== Google Drive 認証 =====
 token_info = json.loads(base64.b64decode(os.environ['USER_OAUTH_B64']))
-creds = Credentials(
+credentials = Credentials(
     token=token_info['token'],
     refresh_token=token_info.get('refresh_token'),
     token_uri=token_info['token_uri'],
     client_id=token_info['client_id'],
-    client_secret=token_info['client_secret'],
+    client_secret=token_info.get('client_secret'),
     scopes=["https://www.googleapis.com/auth/drive"]
 )
-drive_service = build('drive', 'v3', credentials=creds)
+drive_service = build('drive', 'v3', credentials=credentials)
 
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
@@ -43,15 +43,14 @@ def list_image_files(folder_id):
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
-    downloader = MediaFileUpload(io.BytesIO(), mimetype='application/octet-stream')  # dummy
+    downloader = MediaIoBaseUpload(fh, mimetype='application/octet-stream')  # 仮に作る
+    # ここは MediaIoBaseDownload に修正
+    from googleapiclient.http import MediaIoBaseDownload
+    downloader = MediaIoBaseDownload(fh, drive_service.files().get_media(fileId=file_id))
     done = False
-    request = drive_service.files().get_media(fileId=file_id)
-    while True:
-        try:
-            chunk = request.execute()
-            return chunk
-        except:
-            return request.execute()
+    while not done:
+        _, done = downloader.next_chunk()
+    return fh.getvalue()
 
 def pil_open_safe(file_bytes, mime_type):
     try:
@@ -59,10 +58,11 @@ def pil_open_safe(file_bytes, mime_type):
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGBA")
         return img
-    except:
+    except Exception as e:
+        print(f"⚠️ Cannot open image: {e}")
         return None
 
-def extract_exif(file_bytes):
+def extract_exif(file_bytes, mime_type):
     lat = lon = dt = ''
     try:
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
@@ -80,40 +80,28 @@ def extract_exif(file_bytes):
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
     except:
-        pass
+        print(f"⚠️ EXIF not found for {mime_type}")
     return lat, lon, dt
 
-def resize_and_circle_png(file_bytes, size=50):
-    img = pil_open_safe(file_bytes, '')
-    if img is None: return None
-    img = img.resize((size, size))
-    mask = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,size,size), fill=255)
-    img.putalpha(mask)
+def convert_to_png(file_bytes, mime_type, size=None):
+    img = pil_open_safe(file_bytes, mime_type)
+    if img is None:
+        return None
+    if size:
+        img = img.resize(size)
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return buf.getvalue()
 
-def resize_png(file_bytes, width=200):
-    img = pil_open_safe(file_bytes, '')
-    if img is None: return None
-    w, h = img.size
-    new_h = int(h * (width / w))
-    img = img.resize((width, new_h))
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return buf.getvalue()
-
-def upload_file(file_bytes, name, folder_id, mime_type='image/png'):
-    fh = io.BytesIO(file_bytes)
-    media = MediaFileUpload(fh, mimetype=mime_type, resumable=False)
-    file_metadata = {
-        'name': name,
-        'parents': [folder_id]
-    }
-    file = drive_service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-    return file.get('webViewLink')
+def upload_png(file_bytes, filename):
+    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype='image/png')
+    file_metadata = {'name': filename, 'parents': [PNG_UPLOAD_FOLDER_ID]}
+    uploaded_file = drive_service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields='id, webViewLink'
+    ).execute()
+    return uploaded_file['webViewLink']
 
 # ===== キャッシュ読み込み =====
 if os.path.exists(CACHE_FILE):
@@ -124,19 +112,19 @@ else:
 
 rows = []
 for f in list_image_files(FOLDER_ID):
+    # 新しい画像だけ処理
     if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
     print(f"Processing new file: {f['name']}...")
     file_bytes = get_file_bytes(f['id'])
-    lat, lon, dt = extract_exif(file_bytes)
-
-    # PNG生成・アップロード
-    icon_bytes = resize_and_circle_png(file_bytes)
-    popup_bytes = resize_png(file_bytes)
-    png_url_icon = upload_file(icon_bytes, f['name'] + "_icon.png", PNG_UPLOAD_FOLDER_ID) if icon_bytes else None
-    png_url_popup = upload_file(popup_bytes, f['name'] + "_popup.png", PNG_UPLOAD_FOLDER_ID) if popup_bytes else None
-
+    lat, lon, dt = extract_exif(file_bytes, f['mimeType'])
+    # PNGに変換してDriveにアップロード
+    png_bytes = convert_to_png(file_bytes, f['mimeType'])
+    if png_bytes:
+        png_url = upload_png(png_bytes, f['name'] + ".png")
+    else:
+        png_url = ''
     row = {
         'filename': f['name'],
         'latitude': lat,
@@ -144,12 +132,12 @@ for f in list_image_files(FOLDER_ID):
         'datetime': dt,
         'file_id': f['id'],
         'mime_type': f['mimeType'],
-        'png_url_icon': png_url_icon,
-        'png_url_popup': png_url_popup
+        'png_url': png_url
     }
     rows.append(row)
-    cached_files[f['id']] = row
+    cached_files[f['id']] = row  # 新規キャッシュ追加
 
+# キャッシュ更新（ローカル）
 with open(CACHE_FILE,'w') as f:
     json.dump(cached_files,f)
 
@@ -170,12 +158,12 @@ html_lines = [
 for _, row in df.iterrows():
     if row['latitude'] and row['longitude']:
         html_lines.append(f"""
-var icon = L.icon({{iconUrl: '{row['png_url_icon']}', iconSize: [50,50]}});
+var icon = L.icon({{iconUrl: '{row['png_url']}', iconSize: [50,50]}}); 
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['png_url_popup']}' width='200'/>");
++ "<img src='{row['png_url']}' width='200'/>");
 """)
 
 html_lines.append("""
@@ -209,6 +197,7 @@ except:
     repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
     print("HTML created on GitHub.")
 
+# キャッシュ永続化（GitHub）
 try:
     contents = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
     repo.update_file(CACHE_FILE, "update photomap cache", json.dumps(cached_files), contents.sha, branch=BRANCH_NAME)
