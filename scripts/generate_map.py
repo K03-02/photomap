@@ -3,7 +3,7 @@ import os
 import io
 import json
 import base64
-from PIL import Image, ImageDraw
+from PIL import Image
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
@@ -86,37 +86,12 @@ def create_popup_jpeg(image, size=800):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== 白枠丸アイコン生成（PNG透過→白背景JPEG化） =====
-def create_round_icon_png_then_jpeg(image, final_diameter=60, border_thickness=6, base_size=240):
-    # 1. 中央クロップ + リサイズ
-    w, h = image.size
-    min_side = min(w, h)
-    left = (w - min_side)//2
-    top = (h - min_side)//2
-    square = image.crop((left, top, left+min_side, top+min_side))
-    square = square.resize((base_size, base_size), Image.Resampling.LANCZOS)
-
-    # 2. 透過PNGキャンバス
-    canvas_size = base_size + 2*border_thickness
-    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0,0,0,0))
-
-    # 3. 白丸枠を描く
-    draw = ImageDraw.Draw(canvas)
-    draw.ellipse((0,0,canvas_size,canvas_size), fill=(255,255,255,255))
-
-    # 4. 写真を丸く貼る
-    mask = Image.new("L", (base_size, base_size), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.ellipse((0,0,base_size,base_size), fill=255)
-    canvas.paste(square, (border_thickness,border_thickness), mask)
-
-    # 5. JPEG化（白背景に合成）
-    bg = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))
-    bg.paste(canvas, mask=canvas.split()[3])  # alphaチャンネルをマスクとして使用
-    icon_jpeg = bg.resize((final_diameter, final_diameter), Image.Resampling.LANCZOS)
-
+# ===== アイコン生成（単純縮小JPEG） =====
+def create_icon_jpeg(image, final_diameter=60):
+    icon = image.copy()
+    icon.thumbnail((final_diameter, final_diameter), Image.Resampling.LANCZOS)
     with io.BytesIO() as output:
-        icon_jpeg.save(output, "JPEG", quality=90)
+        icon.convert("RGB").save(output, "JPEG", quality=90)
         return output.getvalue()
 
 # ===== キャッシュ読み込み =====
@@ -149,9 +124,9 @@ for f in list_image_files(FOLDER_ID):
     popup_bytes = create_popup_jpeg(image, 800)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    # 白枠丸アイコン
-    icon_bytes = create_round_icon_png_then_jpeg(image, final_diameter=60, border_thickness=6, base_size=240)
-    icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
+    # 単純縮小アイコンJPEG
+    icon_bytes = create_icon_jpeg(image, final_diameter=60)
+    icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload icon {base_name}")
 
     row = {
         'filename': f['name'],
@@ -196,5 +171,5 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with round icons and large popups")
-print("HTML updated on GitHub with fully round white-border icons and large popups.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with large popups and simple icons")
+print("HTML updated on GitHub with large popups and simple icons (no white border).")
