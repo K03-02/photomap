@@ -15,7 +15,6 @@ register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # 元写真フォルダ
-UPLOAD_FOLDER = '15UUPKFqrXl2TZBhVTVqOQuZxchEYawGE'  # 出力先フォルダ
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
@@ -35,8 +34,8 @@ drive_service = build('drive', 'v3', credentials=creds)
 
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
-    query = f"'{folder_id}' in parents and trashed=false"
-    results = drive_service.files().list(q=query, fields="files(id, name, mimeType, webViewLink)").execute()
+    query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
+    results = drive_service.files().list(q=query, fields="files(id, name)").execute()
     return results.get('files', [])
 
 def extract_exif(file_bytes):
@@ -61,7 +60,6 @@ def extract_exif(file_bytes):
     return lat, lon, dt
 
 def create_popup_jpeg(image, size=400):
-    # 長辺を指定サイズに縮小
     w, h = image.size
     if w > h:
         new_w = size
@@ -84,11 +82,11 @@ def create_icon_jpeg(image, size=240, border_size=8):
     # リサイズ
     image = image.resize((size, size), Image.Resampling.LANCZOS)
 
-    # アイコン全体のキャンバスサイズ（縁を含む）
+    # アイコン全体キャンバス
     canvas_size = size + border_size * 2
     result = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 0))
 
-    # 白丸（枠）を描画
+    # 白丸（枠）
     mask_circle = Image.new("L", (canvas_size, canvas_size), 0)
     draw = ImageDraw.Draw(mask_circle)
     draw.ellipse((0, 0, canvas_size, canvas_size), fill=255)
@@ -97,7 +95,7 @@ def create_icon_jpeg(image, size=240, border_size=8):
     border_layer = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 255))
     result.paste(border_layer, (0, 0), mask_circle)
 
-    # 写真を円形にマスクして貼り付け
+    # 写真を円形マスクで貼り付け
     mask_photo = Image.new("L", (size, size), 0)
     draw = ImageDraw.Draw(mask_photo)
     draw.ellipse((0, 0, size, size), fill=255)
@@ -119,22 +117,26 @@ for f in list_image_files(FOLDER_ID):
         continue
 
     print(f"Processing new file: {f['name']}...")
-    file_bytes = drive_service.files().get_media(fileId=f['id']).execute()
-    lat, lon, dt = extract_exif(file_bytes)
+    try:
+        file_bytes = drive_service.files().get_media(fileId=f['id']).execute()
+    except Exception as e:
+        print(f"⚠️ Skipped non-downloadable file {f['name']}: {e}")
+        continue
 
+    lat, lon, dt = extract_exif(file_bytes)
     image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
 
     base_name, _ = os.path.splitext(f['name'])
     popup_name = f"{base_name}_popup.jpg"
     icon_name = f"{base_name}_icon.jpg"
 
-    # ポップアップ画像
+    # ポップアップ用JPEG
     popup_img = create_popup_jpeg(image, 400)
     popup_path = f"images/{popup_name}"
     popup_img.save(popup_path, "JPEG", quality=85)
 
-    # アイコン画像
-    icon_img = create_icon_jpeg(image, size=240, border_size=8)
+    # アイコン用JPEG
+    icon_img = create_icon_jpeg(image, 240, 8)
     icon_path = f"images/{icon_name}"
     icon_img.save(icon_path, "JPEG", quality=90)
 
