@@ -65,11 +65,10 @@ def heic_to_jpeg(file_bytes, max_width):
         im.thumbnail((max_width, max_width))
         buf = io.BytesIO()
         im.convert('RGB').save(buf, format='JPEG', quality=85)
-        return buf.getvalue(), im  # bytes, PIL.Imageオブジェクト
+        return buf.getvalue(), im  # bytes, PIL.Image
 
 def create_highres_icon(image, size=240, border=16):
     """高解像度丸型アイコン作成（正方形トリミング＋白枠）"""
-    # 正方形トリミング（中心）
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
@@ -124,19 +123,19 @@ for f in list_image_files(FOLDER_ID):
     print(f"Processing new file: {f['name']}...")
     file_bytes = drive_service.files().get_media(fileId=f['id']).execute()
     lat, lon, dt = extract_exif(file_bytes)
-    
+
     # ポップアップ用JPEG 400px
     popup_bytes, popup_image = heic_to_jpeg(file_bytes, 400)
     popup_name = f['name'].replace('.HEIC','.jpg')
     popup_path = f"images/{popup_name}"
     upload_to_github(repo, BRANCH_NAME, popup_path, popup_bytes, f"Upload {popup_path}")
-    
+
     # マーカーアイコン 60px表示（高解像度240pxで作成）
     icon_bytes, _ = create_highres_icon(popup_image, size=240, border=16)
     icon_name = f['name'].replace('.HEIC','_icon.jpg')
     icon_path = f"images/{icon_name}"
     upload_to_github(repo, BRANCH_NAME, icon_path, icon_bytes, f"Upload {icon_path}")
-    
+
     # GitHub Pages URL
     base_url = f"https://K03-02.github.io/photomap/images/"
     row = {
@@ -179,7 +178,7 @@ var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: customIcon
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['popup_url']}' width='400'/>");
++ "<img src='{row['popup_url']}' style='max-width:400px; max-height:400px; width:auto; height:auto;'/>");
 """)
 
 html_lines.append("</script></body></html>")
