@@ -87,39 +87,26 @@ def create_popup_jpeg(image, size=800):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== 二段階マスクアイコン作成（白丸＋写真丸） =====
-def create_icon_jpeg_two_step(image, icon_size=240, outer_border=24):
-    """
-    二段階マスクで白丸縁付きアイコン
-    - icon_size: 内側の写真の直径
-    - outer_border: 白丸の余白
-    """
-    # 中央切り抜き
+# ===== 丸アイコン生成（既存アイコンを丸で切る） =====
+def make_icon_round(icon_bytes, final_size=60):
+    image = Image.open(io.BytesIO(icon_bytes)).convert("RGB")
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
     top = (h - min_side)//2
-    photo_cropped = image.crop((left, top, left+min_side, top+min_side))
-    photo_resized = photo_cropped.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+    square = image.crop((left, top, left+min_side, top+min_side))
 
-    # 大きめ白丸キャンバス
-    canvas_size = icon_size + outer_border*2
-    white_bg = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))
+    # 丸マスク
+    mask = Image.new("L", (min_side, min_side), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0,0,min_side,min_side), fill=255)
 
-    # 内側の丸写真マスク
-    mask_inner = Image.new("L", (icon_size, icon_size), 0)
-    draw_inner = ImageDraw.Draw(mask_inner)
-    draw_inner.ellipse((0,0,icon_size,icon_size), fill=255)
-
-    # 写真を貼る
-    white_bg.paste(photo_resized, (outer_border, outer_border), mask_inner)
-
-    # 外枠として白円を描く
-    draw = ImageDraw.Draw(white_bg)
-    draw.ellipse((0,0,canvas_size,canvas_size), outline=(255,255,255), width=outer_border)
+    rounded = Image.new("RGB", (min_side, min_side), (255,255,255))
+    rounded.paste(square, (0,0), mask)
+    rounded = rounded.resize((final_size, final_size), Image.Resampling.LANCZOS)
 
     with io.BytesIO() as output:
-        white_bg.save(output, "JPEG", quality=90)
+        rounded.save(output, "JPEG", quality=90)
         return output.getvalue()
 
 # ===== キャッシュ読み込み =====
@@ -144,17 +131,18 @@ for f in list_image_files(FOLDER_ID):
 
     lat, lon, dt = extract_exif(file_bytes)
     image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-
     base_name, _ = os.path.splitext(f['name'])
     popup_path = f"{IMAGES_DIR}/{base_name}_popup.jpg"
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.jpg"
 
-    # GitHubにアップロード
+    # ポップアップJPEG
     popup_bytes = create_popup_jpeg(image, 800)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    icon_bytes = create_icon_jpeg_two_step(image, 240, 24)
-    icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload icon {base_name}")
+    # 仮アイコンを生成して丸に切る
+    temp_icon_bytes = create_popup_jpeg(image, 240)  # まず中サイズで生成
+    icon_bytes = make_icon_round(temp_icon_bytes, 60)
+    icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
         'filename': f['name'],
@@ -199,5 +187,5 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with large popups and round icons")
-print("HTML updated on GitHub with round icons and large popups.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with round icons and large popups")
+print("HTML updated on GitHub with fully round icons and large popups.")
