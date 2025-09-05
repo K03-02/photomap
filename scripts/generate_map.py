@@ -17,7 +17,7 @@ register_heif_opener()  # HEIC対応
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
-CACHE_FILE = 'photomap_cache.json'
+CACHE_PATH = 'cache/photomap_cache.json'
 BRANCH_NAME = 'main'
 
 # ===== Google Drive 認証 =====
@@ -60,39 +60,31 @@ def extract_exif(file_bytes):
     return lat, lon, dt
 
 def heic_to_jpeg(file_bytes, max_width):
-    """HEIC→JPEG変換しリサイズ"""
     with Image.open(io.BytesIO(file_bytes)) as im:
         im.thumbnail((max_width, max_width))
         buf = io.BytesIO()
         im.convert('RGB').save(buf, format='JPEG', quality=85)
-        return buf.getvalue(), im  # bytes, PIL.Image
+        return buf.getvalue(), im
 
 def create_highres_icon(image, size=240, border=16):
-    """高解像度丸型アイコン作成（正方形トリミング＋白枠）"""
     w, h = image.size
-    min_side = min(w, h)
+    min_side = min(w,h)
     left = (w - min_side)//2
     top = (h - min_side)//2
     square = image.crop((left, top, left+min_side, top+min_side))
 
-    # 高解像度リサイズ
-    icon = square.resize((size, size), Image.LANCZOS)
-
-    # 白背景
+    icon = square.resize((size,size), Image.LANCZOS)
     bg = Image.new("RGB", icon.size, (255,255,255))
 
-    # 丸型マスク
     mask = Image.new("L", icon.size, 0)
     draw = ImageDraw.Draw(mask)
     draw.ellipse((0,0,size,size), fill=255)
-    bg.paste(icon, (0,0), mask)
+    bg.paste(icon,(0,0),mask)
 
-    # 白枠追加
     size_with_border = (icon.size[0]+border*2, icon.size[1]+border*2)
     final_icon = Image.new("RGB", size_with_border, (255,255,255))
-    final_icon.paste(bg, (border,border))
+    final_icon.paste(bg,(border,border))
 
-    # JPEG変換
     buf = io.BytesIO()
     final_icon.save(buf, format='JPEG', quality=85)
     return buf.getvalue(), final_icon
@@ -104,16 +96,16 @@ def upload_to_github(repo, branch, path, file_bytes, commit_msg):
     except:
         repo.create_file(path, commit_msg, file_bytes, branch=branch)
 
-# ===== キャッシュ読み込み =====
-if os.path.exists(CACHE_FILE):
-    with open(CACHE_FILE,'r') as f:
-        cached_files = json.load(f)
-else:
-    cached_files = {}
-
 # ===== GitHub認証 =====
 g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
 repo = g.get_repo(REPO_NAME)
+
+# ===== キャッシュ読み込み（GitHub上） =====
+try:
+    contents = repo.get_contents(CACHE_PATH, ref=BRANCH_NAME)
+    cached_files = json.loads(contents.decoded_content.decode())
+except:
+    cached_files = {}
 
 rows = []
 for f in list_image_files(FOLDER_ID):
@@ -124,19 +116,18 @@ for f in list_image_files(FOLDER_ID):
     file_bytes = drive_service.files().get_media(fileId=f['id']).execute()
     lat, lon, dt = extract_exif(file_bytes)
 
-    # ポップアップ用JPEG 400px
+    # ポップアップ用 JPEG 400px
     popup_bytes, popup_image = heic_to_jpeg(file_bytes, 400)
     popup_name = f['name'].replace('.HEIC','.jpg')
     popup_path = f"images/{popup_name}"
     upload_to_github(repo, BRANCH_NAME, popup_path, popup_bytes, f"Upload {popup_path}")
 
-    # マーカーアイコン 60px表示（高解像度240pxで作成）
-    icon_bytes, _ = create_highres_icon(popup_image, size=240, border=16)
+    # アイコン生成（元画像から高解像度丸型）
+    icon_bytes, _ = create_highres_icon(Image.open(io.BytesIO(file_bytes)), size=240, border=16)
     icon_name = f['name'].replace('.HEIC','_icon.jpg')
     icon_path = f"images/{icon_name}"
     upload_to_github(repo, BRANCH_NAME, icon_path, icon_bytes, f"Upload {icon_path}")
 
-    # GitHub Pages URL
     base_url = f"https://K03-02.github.io/photomap/images/"
     row = {
         'filename': f['name'],
@@ -149,9 +140,13 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ更新
-with open(CACHE_FILE,'w') as f:
-    json.dump(cached_files,f)
+# ===== キャッシュをGitHubに書き戻す =====
+cache_bytes = json.dumps(cached_files, indent=2).encode()
+try:
+    contents = repo.get_contents(CACHE_PATH, ref=BRANCH_NAME)
+    repo.update_file(CACHE_PATH, "update cache", cache_bytes, contents.sha, branch=BRANCH_NAME)
+except:
+    repo.create_file(CACHE_PATH, "create cache", cache_bytes, branch=BRANCH_NAME)
 
 df = pd.DataFrame(rows)
 
@@ -178,7 +173,7 @@ var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: customIcon
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['popup_url']}' style='max-width:400px; max-height:400px; width:auto; height:auto;'/>");
++ "<img src='{row['popup_url']}' style='max-width:400px; max-height:400px; width:100%; height:auto; display:block; margin:auto;'/>");
 """)
 
 html_lines.append("</script></body></html>")
