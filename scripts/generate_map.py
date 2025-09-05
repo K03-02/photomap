@@ -11,6 +11,8 @@ from github import Github, Auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseDownload
+
 
 register_heif_opener()  # HEIC対応
 
@@ -36,10 +38,10 @@ def list_image_files(folder_id):
 def get_file_bytes(file_id):
     fh = io.BytesIO()
     request = drive_service.files().get_media(fileId=file_id)
-    downloader = MediaIoBaseUpload(fh, mimetype='image/png')  # ← PNG用に変更
+    downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done:
-        _, done = downloader.next_chunk()
+        status, done = downloader.next_chunk()
     return fh.getvalue()
 
 def pil_open_safe(file_bytes):
