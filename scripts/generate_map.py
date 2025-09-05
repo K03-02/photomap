@@ -3,7 +3,6 @@ import os
 import io
 import json
 import base64
-import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
@@ -87,13 +86,10 @@ def create_popup_jpeg(image, size=800):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== 白枠丸アイコン生成 =====
-def create_round_icon_with_border(image, final_diameter=60, border_thickness=6, base_size=240):
+# ===== 白枠丸アイコン生成（JPEG用） =====
+def create_round_icon_jpeg(image, final_diameter=60, border_thickness=6, base_size=240):
     """
-    白枠付き丸アイコンを作る
-    - base_size: 元画像を最初にリサイズする大きさ
-    - final_diameter: 最終アイコンの直径
-    - border_thickness: 白枠の太さ
+    白枠付き丸アイコン（JPEG用、背景は白）
     """
     # 中央正方形にクロップ
     w, h = image.size
@@ -103,20 +99,22 @@ def create_round_icon_with_border(image, final_diameter=60, border_thickness=6, 
     square = image.crop((left, top, left+min_side, top+min_side))
     square = square.resize((base_size, base_size), Image.Resampling.LANCZOS)
 
-    # 外側白丸キャンバス
+    # キャンバスは白
     canvas_size = base_size + 2*border_thickness
-    canvas = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))
+    canvas = Image.new("RGB", (canvas_size, canvas_size), (255, 255, 255))
 
-    # 内側丸マスク
+    # 写真用マスク（丸く切り抜く）
     mask = Image.new("L", (base_size, base_size), 0)
     draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,base_size,base_size), fill=255)
+    draw.ellipse((0, 0, base_size, base_size), fill=255)
 
-    # 写真を中央に貼る
+    # 白枠の内側に写真を貼る
     canvas.paste(square, (border_thickness, border_thickness), mask)
 
     # 最終サイズに縮小
     icon = canvas.resize((final_diameter, final_diameter), Image.Resampling.LANCZOS)
+
+    # JPEG保存
     with io.BytesIO() as output:
         icon.save(output, "JPEG", quality=90)
         return output.getvalue()
@@ -152,7 +150,7 @@ for f in list_image_files(FOLDER_ID):
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
     # 白枠丸アイコン
-    icon_bytes = create_round_icon_with_border(image, final_diameter=60, border_thickness=6, base_size=240)
+    icon_bytes = create_round_icon_jpeg(image, final_diameter=60, border_thickness=6, base_size=240)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
