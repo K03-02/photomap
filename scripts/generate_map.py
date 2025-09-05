@@ -65,6 +65,7 @@ def extract_exif(file_bytes):
     return lat, lon, dt
 
 def upload_file_to_github(local_bytes, path, commit_msg):
+    """GitHubにファイルをアップロード"""
     try:
         contents = repo.get_contents(path, ref=BRANCH_NAME)
         repo.update_file(path, commit_msg, local_bytes, contents.sha, branch=BRANCH_NAME)
@@ -72,8 +73,8 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ===== ポップアップ用JPEG作成 =====
-def create_popup_jpeg(image, size=600):
+# ===== ポップアップ用JPEG作成（大きめ） =====
+def create_popup_jpeg(image, size=800):
     w, h = image.size
     if w > h:
         new_w = size
@@ -86,35 +87,39 @@ def create_popup_jpeg(image, size=600):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== アイコンJPEG作成（白背景＋大きめ丸切り抜き＋白縁） =====
-def create_icon_jpeg(image, size=240, border_size=12):
+# ===== 二段階マスクアイコン作成（白丸＋写真丸） =====
+def create_icon_jpeg_two_step(image, icon_size=240, outer_border=24):
     """
-    白背景に丸く切り抜いたアイコン作成。
-    size: 丸画像の直径
-    border_size: 白背景と枠幅
+    二段階マスクで白丸縁付きアイコン
+    - icon_size: 内側の写真の直径
+    - outer_border: 白丸の余白
     """
+    # 中央切り抜き
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
     top = (h - min_side)//2
-    image_cropped = image.crop((left, top, left+min_side, top+min_side))
-    image_resized = image_cropped.resize((size, size), Image.Resampling.LANCZOS)
+    photo_cropped = image.crop((left, top, left+min_side, top+min_side))
+    photo_resized = photo_cropped.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
 
-    canvas_size = size + border_size*2
-    result = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))
+    # 大きめ白丸キャンバス
+    canvas_size = icon_size + outer_border*2
+    white_bg = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))
 
-    # 丸マスクで貼り付け
-    mask = Image.new("L", (size, size), 0)
-    draw_mask = ImageDraw.Draw(mask)
-    draw_mask.ellipse((0,0,size,size), fill=255)
-    result.paste(image_resized, (border_size,border_size), mask)
+    # 内側の丸写真マスク
+    mask_inner = Image.new("L", (icon_size, icon_size), 0)
+    draw_inner = ImageDraw.Draw(mask_inner)
+    draw_inner.ellipse((0,0,icon_size,icon_size), fill=255)
 
-    # 白縁を円で描く
-    draw = ImageDraw.Draw(result)
-    draw.ellipse((0,0,canvas_size,canvas_size), outline=(255,255,255), width=border_size)
+    # 写真を貼る
+    white_bg.paste(photo_resized, (outer_border, outer_border), mask_inner)
+
+    # 外枠として白円を描く
+    draw = ImageDraw.Draw(white_bg)
+    draw.ellipse((0,0,canvas_size,canvas_size), outline=(255,255,255), width=outer_border)
 
     with io.BytesIO() as output:
-        result.save(output, "JPEG", quality=90)
+        white_bg.save(output, "JPEG", quality=90)
         return output.getvalue()
 
 # ===== キャッシュ読み込み =====
@@ -145,10 +150,10 @@ for f in list_image_files(FOLDER_ID):
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.jpg"
 
     # GitHubにアップロード
-    popup_bytes = create_popup_jpeg(image, 600)
+    popup_bytes = create_popup_jpeg(image, 800)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    icon_bytes = create_icon_jpeg(image, 240, 12)
+    icon_bytes = create_icon_jpeg_two_step(image, 240, 24)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload icon {base_name}")
 
     row = {
@@ -188,11 +193,11 @@ var icon = L.icon({{
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['popup_url']}' style='max-width:600px; width:100%; height:auto;'/>");
++ "<img src='{row['popup_url']}' style='max-width:800px; width:100%; height:auto;'/>");
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with round icons and larger popups")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with large popups and round icons")
 print("HTML updated on GitHub with round icons and large popups.")
