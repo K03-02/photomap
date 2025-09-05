@@ -19,6 +19,7 @@ register_heif_opener()  # HEIC対応
 # ===== 設定 =====
 FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'   # 元写真のフォルダ
 PNG_FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # PNG用フォルダ
+PNG_UPLOAD_FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
