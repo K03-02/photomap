@@ -11,14 +11,15 @@ from github import Github, Auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-register_heif_opener()  # HEIC対応
+register_heif_opener()
 
 # ===== 設定 =====
-FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'  # 元写真フォルダ
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
 BRANCH_NAME = 'main'
+IMAGES_DIR = 'images'
 
 # ===== Google Drive 認証 =====
 token_info = json.loads(base64.b64decode(os.environ['USER_OAUTH_B64']))
@@ -31,6 +32,10 @@ creds = Credentials(
     scopes=token_info.get('scopes')
 )
 drive_service = build('drive', 'v3', credentials=creds)
+
+# ===== GitHub 認証 =====
+g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
+repo = g.get_repo(REPO_NAME)
 
 # ===== ヘルパー関数 =====
 def list_image_files(folder_id):
@@ -59,6 +64,14 @@ def extract_exif(file_bytes):
         print(f"⚠️ EXIF not found")
     return lat, lon, dt
 
+def upload_file_to_github(local_bytes, path, commit_msg):
+    try:
+        contents = repo.get_contents(path, ref=BRANCH_NAME)
+        repo.update_file(path, commit_msg, local_bytes, contents.sha, branch=BRANCH_NAME)
+    except:
+        repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
+    return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
+
 def create_popup_jpeg(image, size=400):
     w, h = image.size
     if w > h:
@@ -68,52 +81,41 @@ def create_popup_jpeg(image, size=400):
         new_h = size
         new_w = int(w * size / h)
     resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-    return resized.convert("RGB")  # RGBA → RGB に変換
+    with io.BytesIO() as output:
+        resized.convert("RGB").save(output, "JPEG", quality=85)
+        return output.getvalue()
 
 def create_icon_jpeg(image, size=240, border_size=8):
-    # 正方形トリミング（中央で切り抜き）
+    # 正方形中央切り抜き
     w, h = image.size
     min_side = min(w, h)
-    left = (w - min_side) // 2
-    top = (h - min_side) // 2
-    right = left + min_side
-    bottom = top + min_side
-    image = image.crop((left, top, right, bottom))
-
-    # リサイズ
+    left = (w - min_side)//2
+    top = (h - min_side)//2
+    image = image.crop((left, top, left+min_side, top+min_side))
     image = image.resize((size, size), Image.Resampling.LANCZOS)
 
-    # アイコン全体キャンバス
-    canvas_size = size + border_size * 2
-    result = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 0))
+    canvas_size = size + border_size*2
+    result = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))  # 白背景
 
-    # 白丸（枠）
-    mask_circle = Image.new("L", (canvas_size, canvas_size), 0)
-    draw = ImageDraw.Draw(mask_circle)
-    draw.ellipse((0, 0, canvas_size, canvas_size), fill=255)
-    draw.ellipse((border_size, border_size, canvas_size-border_size, canvas_size-border_size), fill=0)
+    mask = Image.new("L", (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0,0,size,size), fill=255)
+    result.paste(image, (border_size,border_size), mask)
 
-    border_layer = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 255))
-    result.paste(border_layer, (0, 0), mask_circle)
-
-    # 写真を円形マスクで貼り付け
-    mask_photo = Image.new("L", (size, size), 0)
-    draw = ImageDraw.Draw(mask_photo)
-    draw.ellipse((0, 0, size, size), fill=255)
-    result.paste(image, (border_size, border_size), mask_photo)
-
-    return result.convert("RGB")  # RGBA → RGB に変換
+    with io.BytesIO() as output:
+        result.save(output, "JPEG", quality=90)
+        return output.getvalue()
 
 # ===== キャッシュ読み込み =====
-if os.path.exists(CACHE_FILE):
-    with open(CACHE_FILE,'r') as f:
-        cached_files = json.load(f)
-else:
+try:
+    contents = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
+    cached_files = json.loads(contents.decoded_content.decode())
+except:
     cached_files = {}
 
 rows = []
 for f in list_image_files(FOLDER_ID):
-    if f['id'] in cached_files and "icon_url" in cached_files[f['id']]:
+    if f['id'] in cached_files:
         rows.append(cached_files[f['id']])
         continue
 
@@ -121,28 +123,22 @@ for f in list_image_files(FOLDER_ID):
     try:
         file_bytes = drive_service.files().get_media(fileId=f['id']).execute()
     except Exception as e:
-        print(f"⚠️ Skipped non-downloadable file {f['name']}: {e}")
+        print(f"⚠️ Skipped {f['name']}: {e}")
         continue
 
     lat, lon, dt = extract_exif(file_bytes)
     image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
 
     base_name, _ = os.path.splitext(f['name'])
-    popup_name = f"{base_name}_popup.jpg"
-    icon_name = f"{base_name}_icon.jpg"
+    popup_path = f"{IMAGES_DIR}/{base_name}_popup.jpg"
+    icon_path = f"{IMAGES_DIR}/{base_name}_icon.jpg"
 
-    # ポップアップ用JPEG
-    popup_img = create_popup_jpeg(image, 400)
-    popup_path = f"images/{popup_name}"
-    popup_img.save(popup_path, "JPEG", quality=85)
+    # GitHubにアップロード
+    popup_bytes = create_popup_jpeg(image, 400)
+    popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    # アイコン用JPEG
-    icon_img = create_icon_jpeg(image, 240, 8)
-    icon_path = f"images/{icon_name}"
-    icon_img.save(icon_path, "JPEG", quality=90)
-
-    popup_url = f"https://K03-02.github.io/photomap/{popup_path}"
-    icon_url = f"https://K03-02.github.io/photomap/{icon_path}"
+    icon_bytes = create_icon_jpeg(image, 240, 8)
+    icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload icon {base_name}")
 
     row = {
         'filename': f['name'],
@@ -155,11 +151,8 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ更新
-with open(CACHE_FILE,'w') as f:
-    json.dump(cached_files,f)
-
-df = pd.DataFrame(rows)
+# キャッシュをGitHubに保存
+upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
 # ===== HTML生成 =====
 html_lines = [
@@ -173,8 +166,8 @@ html_lines = [
     "L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);",
     "var markers = [];"]
 
-for _, row in df.iterrows():
-    if row['latitude'] and row['longitude'] and row['popup_url'] and row['icon_url']:
+for row in rows:
+    if row['latitude'] and row['longitude']:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
@@ -182,7 +175,6 @@ var icon = L.icon({{
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
-markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
 + "<img src='{row['popup_url']}' style='max-width:400px; height:auto;'/>");
@@ -191,14 +183,5 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-
-# ===== GitHub更新 =====
-g = Github(auth=Auth.Token(os.environ['GITHUB_TOKEN']))
-repo = g.get_repo(REPO_NAME)
-try:
-    contents = repo.get_contents(HTML_NAME, ref=BRANCH_NAME)
-    repo.update_file(HTML_NAME, "update HTML with new images", html_str, contents.sha, branch=BRANCH_NAME)
-    print("HTML updated on GitHub.")
-except:
-    repo.create_file(HTML_NAME, "create HTML", html_str, branch=BRANCH_NAME)
-    print("HTML created on GitHub.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML")
+print("HTML updated on GitHub with images, icons, and cache.")
