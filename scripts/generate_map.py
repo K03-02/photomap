@@ -2,9 +2,8 @@
 import os
 import io
 import json
-import base64
 import pandas as pd
-from PIL import Image
+from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
@@ -59,11 +58,34 @@ def extract_exif(file_bytes):
         print(f"⚠️ EXIF not found")
     return lat, lon, dt
 
-def heic_to_jpeg(file_bytes):
+def heic_to_jpeg(file_bytes, max_width):
+    """HEIC→JPEG変換しリサイズ"""
     with Image.open(io.BytesIO(file_bytes)) as im:
-        with io.BytesIO() as out_buf:
-            im.convert('RGB').save(out_buf, format='JPEG', quality=90)
-            return out_buf.getvalue()
+        im.thumbnail((max_width, max_width))
+        buf = io.BytesIO()
+        im.convert('RGB').save(buf, format='JPEG', quality=85)
+        return buf.getvalue(), im  # bytes, PIL.Imageオブジェクト
+
+def create_icon(image, size=60, border=4):
+    """丸型＋白枠JPEGアイコンを作成"""
+    icon = image.copy()
+    icon.thumbnail((size, size))
+    # 白背景
+    bg = Image.new("RGB", icon.size, (255,255,255))
+    # 丸型マスク
+    mask = Image.new("L", icon.size, 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0,0,icon.size[0], icon.size[1]), fill=255)
+    bg.paste(icon, (0,0), mask)
+    icon = bg
+    # 白枠追加
+    size_with_border = (icon.size[0]+border*2, icon.size[1]+border*2)
+    final_icon = Image.new("RGB", size_with_border, (255,255,255))
+    final_icon.paste(icon, (border,border))
+    # JPEG変換
+    buf = io.BytesIO()
+    final_icon.save(buf, format='JPEG', quality=85)
+    return buf.getvalue()
 
 def upload_to_github(repo, branch, path, file_bytes, commit_msg):
     try:
@@ -92,23 +114,27 @@ for f in list_image_files(FOLDER_ID):
     file_bytes = drive_service.files().get_media(fileId=f['id']).execute()
     lat, lon, dt = extract_exif(file_bytes)
     
-    # HEIC → JPEG変換
-    jpeg_bytes = heic_to_jpeg(file_bytes)
-    jpeg_name = f['name'].replace('.HEIC','.jpg')
-    jpeg_path = f"images/{jpeg_name}"
+    # ポップアップ用JPEG 400px
+    popup_bytes, popup_image = heic_to_jpeg(file_bytes, 400)
+    popup_name = f['name'].replace('.HEIC','.jpg')
+    popup_path = f"images/{popup_name}"
+    upload_to_github(repo, BRANCH_NAME, popup_path, popup_bytes, f"Upload {popup_path}")
     
-    # GitHubにアップロード
-    upload_to_github(repo, BRANCH_NAME, jpeg_path, jpeg_bytes, f"Upload {jpeg_path}")
+    # マーカーアイコン 60px丸型＋白枠
+    icon_bytes = create_icon(popup_image, size=60, border=4)
+    icon_name = f['name'].replace('.HEIC','_icon.jpg')
+    icon_path = f"images/{icon_name}"
+    upload_to_github(repo, BRANCH_NAME, icon_path, icon_bytes, f"Upload {icon_path}")
     
     # GitHub Pages URL
-    jpeg_url = f"https://K03-02.github.io/photomap/{jpeg_path}"
-    
+    base_url = f"https://K03-02.github.io/photomap/images/"
     row = {
         'filename': f['name'],
         'latitude': lat,
         'longitude': lon,
         'datetime': dt,
-        'jpeg_url': jpeg_url
+        'popup_url': base_url + popup_name,
+        'icon_url': base_url + icon_name
     }
     rows.append(row)
     cached_files[f['id']] = row
@@ -132,13 +158,17 @@ html_lines = [
     "var markers = [];"]
 
 for _, row in df.iterrows():
-    if row['latitude'] and row['longitude'] and row['jpeg_url']:
+    if row['latitude'] and row['longitude']:
         html_lines.append(f"""
-var marker = L.marker([{row['latitude']},{row['longitude']}]).addTo(map);
+var customIcon = L.icon({{
+    iconUrl: '{row['icon_url']}',
+    iconSize: [60, 60]
+}});
+var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: customIcon}}).addTo(map);
 markers.push(marker);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['jpeg_url']}' width='200'/>");
++ "<img src='{row['popup_url']}' width='400'/>");
 """)
 
 html_lines.append("</script></body></html>")
