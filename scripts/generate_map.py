@@ -101,7 +101,7 @@ for f in list_image_files(FOLDER_ID):
     upload_to_github(repo, BRANCH_NAME, jpeg_path, jpeg_bytes, f"Upload {jpeg_path}")
     
     # GitHub Pages URL
-    jpeg_url = f"https://{os.environ['K03-02']}.github.io/photomap/{jpeg_path}"
+    jpeg_url = f"https://K03-02.github.io/photomap/{jpeg_path}"
     
     row = {
         'filename': f['name'],
