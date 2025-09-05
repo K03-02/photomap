@@ -87,26 +87,38 @@ def create_popup_jpeg(image, size=800):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== 丸アイコン生成（既存アイコンを丸で切る） =====
-def make_icon_round(icon_bytes, final_size=60):
-    image = Image.open(io.BytesIO(icon_bytes)).convert("RGB")
+# ===== 白枠丸アイコン生成 =====
+def create_round_icon_with_border(image, final_diameter=60, border_thickness=6, base_size=240):
+    """
+    白枠付き丸アイコンを作る
+    - base_size: 元画像を最初にリサイズする大きさ
+    - final_diameter: 最終アイコンの直径
+    - border_thickness: 白枠の太さ
+    """
+    # 中央正方形にクロップ
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
     top = (h - min_side)//2
     square = image.crop((left, top, left+min_side, top+min_side))
+    square = square.resize((base_size, base_size), Image.Resampling.LANCZOS)
 
-    # 丸マスク
-    mask = Image.new("L", (min_side, min_side), 0)
+    # 外側白丸キャンバス
+    canvas_size = base_size + 2*border_thickness
+    canvas = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))
+
+    # 内側丸マスク
+    mask = Image.new("L", (base_size, base_size), 0)
     draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,min_side,min_side), fill=255)
+    draw.ellipse((0,0,base_size,base_size), fill=255)
 
-    rounded = Image.new("RGB", (min_side, min_side), (255,255,255))
-    rounded.paste(square, (0,0), mask)
-    rounded = rounded.resize((final_size, final_size), Image.Resampling.LANCZOS)
+    # 写真を中央に貼る
+    canvas.paste(square, (border_thickness, border_thickness), mask)
 
+    # 最終サイズに縮小
+    icon = canvas.resize((final_diameter, final_diameter), Image.Resampling.LANCZOS)
     with io.BytesIO() as output:
-        rounded.save(output, "JPEG", quality=90)
+        icon.save(output, "JPEG", quality=90)
         return output.getvalue()
 
 # ===== キャッシュ読み込み =====
@@ -139,9 +151,8 @@ for f in list_image_files(FOLDER_ID):
     popup_bytes = create_popup_jpeg(image, 800)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    # 仮アイコンを生成して丸に切る
-    temp_icon_bytes = create_popup_jpeg(image, 240)  # まず中サイズで生成
-    icon_bytes = make_icon_round(temp_icon_bytes, 60)
+    # 白枠丸アイコン
+    icon_bytes = create_round_icon_with_border(image, final_diameter=60, border_thickness=6, base_size=240)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
@@ -188,4 +199,4 @@ html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
 upload_file_to_github(html_str, HTML_NAME, "Update HTML with round icons and large popups")
-print("HTML updated on GitHub with fully round icons and large popups.")
+print("HTML updated on GitHub with fully round white-border icons and large popups.")
