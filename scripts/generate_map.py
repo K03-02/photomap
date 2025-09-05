@@ -15,8 +15,8 @@ from googleapiclient.http import MediaFileUpload
 register_heif_opener()  # HEIC対応
 
 # ===== 設定 =====
-FOLDER_ID = 'YOUR_DRIVE_IMAGE_FOLDER_ID'
-PNG_UPLOAD_FOLDER_ID = 'YOUR_DRIVE_PNG_FOLDER_ID'
+FOLDER_ID = '1d9C_qIKxBlzngjpZjgW68kIZkPZ0NAwH'
+PNG_UPLOAD_FOLDER_ID = '15UUPKFqrXl2TZBhVTVqOQuZxchEYawGE'
 REPO_NAME = 'K03-02/photomap'
 HTML_NAME = 'index.html'
 CACHE_FILE = 'photomap_cache.json'
