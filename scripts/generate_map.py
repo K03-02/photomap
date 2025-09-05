@@ -72,6 +72,7 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
+# ===== ポップアップ用JPEG作成 =====
 def create_popup_jpeg(image, size=600):
     w, h = image.size
     if w > h:
@@ -85,25 +86,30 @@ def create_popup_jpeg(image, size=600):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-def create_icon_jpeg(image, size=240, border_size=8):
-    # 正方形中央切り抜き
+# ===== アイコンJPEG作成（白背景＋大きめ丸切り抜き＋白縁） =====
+def create_icon_jpeg(image, size=240, border_size=12):
+    """
+    白背景に丸く切り抜いたアイコン作成。
+    size: 丸画像の直径
+    border_size: 白背景と枠幅
+    """
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
     top = (h - min_side)//2
-    image = image.crop((left, top, left+min_side, top+min_side))
-    image = image.resize((size, size), Image.Resampling.LANCZOS)
+    image_cropped = image.crop((left, top, left+min_side, top+min_side))
+    image_resized = image_cropped.resize((size, size), Image.Resampling.LANCZOS)
 
     canvas_size = size + border_size*2
-    result = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))  # 白背景
+    result = Image.new("RGB", (canvas_size, canvas_size), (255,255,255))
 
-    # 写真を丸く切り抜き
+    # 丸マスクで貼り付け
     mask = Image.new("L", (size, size), 0)
     draw_mask = ImageDraw.Draw(mask)
     draw_mask.ellipse((0,0,size,size), fill=255)
-    result.paste(image, (border_size,border_size), mask)
+    result.paste(image_resized, (border_size,border_size), mask)
 
-    # 白い円の枠を描く
+    # 白縁を円で描く
     draw = ImageDraw.Draw(result)
     draw.ellipse((0,0,canvas_size,canvas_size), outline=(255,255,255), width=border_size)
 
@@ -142,7 +148,7 @@ for f in list_image_files(FOLDER_ID):
     popup_bytes = create_popup_jpeg(image, 600)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    icon_bytes = create_icon_jpeg(image, 240, 8)
+    icon_bytes = create_icon_jpeg(image, 240, 12)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload icon {base_name}")
 
     row = {
@@ -188,5 +194,5 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with larger popup and round icons")
-print("HTML updated on GitHub with improved icons and popups.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with round icons and larger popups")
+print("HTML updated on GitHub with round icons and large popups.")
