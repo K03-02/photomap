@@ -67,26 +67,36 @@ def heic_to_jpeg(file_bytes, max_width):
         im.convert('RGB').save(buf, format='JPEG', quality=85)
         return buf.getvalue(), im  # bytes, PIL.Imageオブジェクト
 
-def create_icon(image, size=60, border=4):
-    """丸型＋白枠JPEGアイコンを作成"""
-    icon = image.copy()
-    icon.thumbnail((size, size))
+def create_highres_icon(image, size=240, border=16):
+    """高解像度丸型アイコン作成（正方形トリミング＋白枠）"""
+    # 正方形トリミング（中心）
+    w, h = image.size
+    min_side = min(w, h)
+    left = (w - min_side)//2
+    top = (h - min_side)//2
+    square = image.crop((left, top, left+min_side, top+min_side))
+
+    # 高解像度リサイズ
+    icon = square.resize((size, size), Image.LANCZOS)
+
     # 白背景
     bg = Image.new("RGB", icon.size, (255,255,255))
+
     # 丸型マスク
     mask = Image.new("L", icon.size, 0)
     draw = ImageDraw.Draw(mask)
-    draw.ellipse((0,0,icon.size[0], icon.size[1]), fill=255)
+    draw.ellipse((0,0,size,size), fill=255)
     bg.paste(icon, (0,0), mask)
-    icon = bg
+
     # 白枠追加
     size_with_border = (icon.size[0]+border*2, icon.size[1]+border*2)
     final_icon = Image.new("RGB", size_with_border, (255,255,255))
-    final_icon.paste(icon, (border,border))
+    final_icon.paste(bg, (border,border))
+
     # JPEG変換
     buf = io.BytesIO()
     final_icon.save(buf, format='JPEG', quality=85)
-    return buf.getvalue()
+    return buf.getvalue(), final_icon
 
 def upload_to_github(repo, branch, path, file_bytes, commit_msg):
     try:
@@ -121,8 +131,8 @@ for f in list_image_files(FOLDER_ID):
     popup_path = f"images/{popup_name}"
     upload_to_github(repo, BRANCH_NAME, popup_path, popup_bytes, f"Upload {popup_path}")
     
-    # マーカーアイコン 60px丸型＋白枠
-    icon_bytes = create_icon(popup_image, size=60, border=4)
+    # マーカーアイコン 60px表示（高解像度240pxで作成）
+    icon_bytes, _ = create_highres_icon(popup_image, size=240, border=16)
     icon_name = f['name'].replace('.HEIC','_icon.jpg')
     icon_path = f"images/{icon_name}"
     upload_to_github(repo, BRANCH_NAME, icon_path, icon_bytes, f"Upload {icon_path}")
