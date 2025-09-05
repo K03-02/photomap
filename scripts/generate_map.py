@@ -2,6 +2,7 @@
 import os
 import io
 import json
+import base64
 import pandas as pd
 from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
