@@ -51,7 +51,6 @@ def list_image_files(folder_id):
     results = drive_service.files().list(q=query, fields="files(id, name)").execute()
     return results.get('files', [])
 
-# GPSとDateTimeOriginalを取得（HEICも対応）
 def extract_exif(file_bytes):
     lat = lon = dt = ''
     try:
@@ -167,7 +166,7 @@ for f in list_image_files(FOLDER_ID):
 # ===== キャッシュ保存 =====
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# ===== HTML生成（ポップアップ最大幅800px、アイコン自由調整） =====
+# ===== HTML生成（ポップアップ幅800px固定、アイコン調整可能） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -191,13 +190,13 @@ var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).ad
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='max-width:800px; width:100%; height:auto;'/>",
-    {{ maxWidth: 850 }} // ポップアップが画面からはみ出さないように設定
+    + "<img src='{row['popup_url']}' style='width:800px; height:auto;'/>",
+    {{ maxWidth: 820 }} // ポップアップがはみ出さないよう余裕を持たせる
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup max 800px and adjustable icon size")
-print("HTML updated on GitHub with popup max 800px and icon adjustable in HTML.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup width 800px and adjustable icon size")
+print("HTML updated on GitHub: popup width fixed 800px, icon size adjustable in HTML.")
