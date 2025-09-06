@@ -55,7 +55,6 @@ def list_image_files(folder_id):
 def extract_exif(file_bytes):
     lat = lon = dt = ''
     try:
-        # 撮影日時
         with Image.open(io.BytesIO(file_bytes)) as img:
             exif = img._getexif()
             if exif:
@@ -63,7 +62,6 @@ def extract_exif(file_bytes):
                     if ExifTags.TAGS.get(tag) == "DateTimeOriginal":
                         dt = value
 
-        # GPS情報
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -88,18 +86,10 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ポップアップ用JPEG（3倍サイズ）
-def create_popup_jpeg(image, size=2700):
-    w, h = image.size
-    if w > h:
-        new_w = size
-        new_h = int(h * size / w)
-    else:
-        new_h = size
-        new_w = int(w * size / h)
-    resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+# ポップアップ用JPEG（元サイズのまま保存、HTMLで200px制限）
+def create_popup_jpeg(image):
     with io.BytesIO() as output:
-        resized.convert("RGB").save(output, "JPEG", quality=85)
+        image.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
 # 白枠丸アイコン (透過WebP)
@@ -161,10 +151,10 @@ for f in list_image_files(FOLDER_ID):
     popup_path = f"{IMAGES_DIR}/{base_name}_popup.jpg"
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.webp"
 
-    popup_bytes = create_popup_jpeg(image, 2700)
+    popup_bytes = create_popup_jpeg(image)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    icon_bytes = create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480)
+    icon_bytes = create_round_icon_webp(image, final_diameter=120)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
@@ -181,7 +171,7 @@ for f in list_image_files(FOLDER_ID):
 # キャッシュ保存
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# HTML生成
+# HTML生成（ポップアップ最大200pxに制限）
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -198,21 +188,20 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [80, 80],  // アイコンサイズを2/3に縮小
+    iconSize: [120, 120],
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='width:400px; height:auto;'/>",  // ポップアップ幅を400pxに固定
-    {{ maxWidth: 450, minWidth: 400 }}  // ポップアップ幅を画像に合わせる
+    + "<img src='{row['popup_url']}' style='max-width:200px; max-height:200px; width:auto; height:auto;'/>",
+    {{ maxWidth: 220, minWidth: 200 }}
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with 400px popups and smaller icons")
-print("HTML updated on GitHub with 400px popups and smaller icons.")
-
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with popups max 200px")
+print("HTML updated on GitHub with popups max 200px.")
