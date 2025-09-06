@@ -5,7 +5,7 @@ import os
 import io
 import json
 import base64
-from PIL import Image, ImageDraw, ExifTags
+from PIL import Image, ImageDraw
 from pillow_heif import register_heif_opener
 import exifread
 from github import Github, Auth
@@ -51,17 +51,15 @@ def list_image_files(folder_id):
     results = drive_service.files().list(q=query, fields="files(id, name)").execute()
     return results.get('files', [])
 
+# GPSとDateTimeOriginalを取得（HEICも対応）
 def extract_exif(file_bytes):
     lat = lon = dt = ''
     try:
-        with Image.open(io.BytesIO(file_bytes)) as img:
-            exif = img._getexif()
-            if exif:
-                for tag, value in exif.items():
-                    if ExifTags.TAGS.get(tag) == "DateTimeOriginal":
-                        dt = value
-
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
+        # 撮影日時
+        if 'EXIF DateTimeOriginal' in tags:
+            dt = str(tags['EXIF DateTimeOriginal'])
+        # GPS
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
@@ -99,8 +97,8 @@ def create_popup_jpeg_max400(image, max_size=400):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== アイコン生成（丸・白枠・80px） =====
-def create_round_icon_webp(image, final_diameter=80, border_thickness=6, base_size=480):
+# ===== アイコン生成（丸・白枠・120px） =====
+def create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480):
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
@@ -162,8 +160,8 @@ for f in list_image_files(FOLDER_ID):
     popup_bytes = create_popup_jpeg_max400(image)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    # アイコン生成（丸・80px）
-    icon_bytes = create_round_icon_webp(image, final_diameter=80)
+    # アイコン生成（丸・120px）
+    icon_bytes = create_round_icon_webp(image, final_diameter=120)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
@@ -180,7 +178,7 @@ for f in list_image_files(FOLDER_ID):
 # ===== キャッシュ保存 =====
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# ===== HTML生成（ポップアップはスマホでも最大400px） =====
+# ===== HTML生成（スマホでもポップアップ400px） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -197,7 +195,7 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [80, 80],
+    iconSize: [120, 120],
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
@@ -211,5 +209,5 @@ marker.bindPopup(
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup images max400px and icons 2/3 size")
-print("HTML updated on GitHub with popup images max400px and icons 2/3 size.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup images max400px and icons 120px, fixed EXIF")
+print("HTML updated on GitHub with popup images max400px, icons 120px, and fixed EXIF.")
