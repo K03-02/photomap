@@ -166,7 +166,7 @@ for f in list_image_files(FOLDER_ID):
 # ===== キャッシュ保存 =====
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# ===== HTML生成（ポップアップ幅800px固定、アイコン調整可能） =====
+# ===== HTML生成（ポップアップ自動スクロール付き） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -183,7 +183,7 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [80, 80], // アイコンはHTMLで自由に調整可能
+    iconSize: [80, 80], // HTMLで調整可能
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
@@ -191,12 +191,16 @@ marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
     + "<img src='{row['popup_url']}' style='width:800px; height:auto;'/>",
-    {{ maxWidth: 820 }} // ポップアップがはみ出さないよう余裕を持たせる
+    {{
+        maxWidth: 820,        // ポップアップ幅
+        autoPan: true,        // ポップアップ開いたら自動スクロール
+        autoPanPadding: [50,50] // 端から余白50px
+    }}
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup width 800px and adjustable icon size")
-print("HTML updated on GitHub: popup width fixed 800px, icon size adjustable in HTML.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with auto-pan popups")
+print("HTML updated on GitHub: popup auto-pan enabled, width fixed 800px, icon adjustable.")
