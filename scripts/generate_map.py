@@ -86,14 +86,14 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ポップアップ用JPEG（元サイズのまま保存、HTMLで200px制限）
+# ポップアップ用JPEG（元サイズそのまま、HTMLで400pxに制御）
 def create_popup_jpeg(image):
     with io.BytesIO() as output:
         image.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
 # 白枠丸アイコン (透過WebP)
-def create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480):
+def create_round_icon_webp(image, final_diameter=80, border_thickness=6, base_size=480):
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
@@ -154,7 +154,7 @@ for f in list_image_files(FOLDER_ID):
     popup_bytes = create_popup_jpeg(image)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    icon_bytes = create_round_icon_webp(image, final_diameter=120)
+    icon_bytes = create_round_icon_webp(image, final_diameter=80)  # 2/3 サイズ
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
@@ -171,7 +171,7 @@ for f in list_image_files(FOLDER_ID):
 # キャッシュ保存
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# HTML生成（ポップアップ最大200pxに制限）
+# HTML生成（ポップアップ最大400px）
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -188,20 +188,20 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [120, 120],
+    iconSize: [80, 80],
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='max-width:200px; max-height:200px; width:auto; height:auto;'/>",
-    {{ maxWidth: 220, minWidth: 200 }}
+    + "<img src='{row['popup_url']}' style='max-width:400px; max-height:400px; width:auto; height:auto;'/>",
+    {{ maxWidth: 420, minWidth: 200 }}
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with popups max 200px")
-print("HTML updated on GitHub with popups max 200px.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with popups max 400px and smaller icons")
+print("HTML updated on GitHub with popups max 400px and icons 2/3 size.")
