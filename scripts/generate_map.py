@@ -72,7 +72,7 @@ def upload_file_to_github(local_bytes, path, commit_msg):
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
 # ===== ポップアップ用JPEG作成 =====
-def create_popup_jpeg(image, size=800):
+def create_popup_jpeg(image, size=1600):  # ← 元サイズ拡大
     w, h = image.size
     if w > h:
         new_w = size
@@ -86,7 +86,7 @@ def create_popup_jpeg(image, size=800):
         return output.getvalue()
 
 # ===== 白枠付き丸アイコンWebP生成 =====
-def create_round_icon_webp(image, final_diameter=60, border_thickness=6, base_size=240):
+def create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480):
     # 中央クロップ + リサイズ
     w, h = image.size
     min_side = min(w, h)
@@ -142,11 +142,11 @@ for f in list_image_files(FOLDER_ID):
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.webp"
 
     # ポップアップJPEG
-    popup_bytes = create_popup_jpeg(image, 800)
+    popup_bytes = create_popup_jpeg(image, 1600)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
     # 白枠付き丸WebPアイコン
-    icon_bytes = create_round_icon_webp(image, final_diameter=60, border_thickness=6, base_size=240)
+    icon_bytes = create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
@@ -180,17 +180,17 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [60, 60],
+    iconSize: [120, 120],   // ← 2倍サイズ
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-+ "<img src='{row['popup_url']}' style='max-width:800px; width:100%; height:auto;'/>");
++ "<img src='{row['popup_url']}' style='max-width:1600px; width:100%; height:auto;'/>"); // ← 最大幅1600px
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with round WebP icons and large popups")
-print("HTML updated on GitHub with round WebP icons with white border and large popups.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with bigger icons and larger popups")
+print("HTML updated on GitHub with 120px round icons and larger popups (max 1600px).")
