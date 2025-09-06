@@ -85,7 +85,7 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ===== ポップアップ画像を最大400pxに縮小 =====
+# ===== ポップアップ画像を縦横最大400pxに縮小 =====
 def create_popup_jpeg_max400(image, max_size=400):
     w, h = image.size
     if w > h:
@@ -180,7 +180,7 @@ for f in list_image_files(FOLDER_ID):
 # ===== キャッシュ保存 =====
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# ===== HTML生成（ポップアップ制限なし） =====
+# ===== HTML生成（ポップアップはスマホでも最大400px） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -204,7 +204,7 @@ var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).ad
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='width:auto; height:auto;'/>"
+    + "<img src='{row['popup_url']}' style='max-width:400px; width:100%; height:auto;'/>"
 );
 """)
 
