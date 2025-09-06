@@ -13,7 +13,6 @@ import os
 import io
 import json
 import base64
-import pandas as pd
 from PIL import Image, ImageDraw, ExifTags
 from pillow_heif import register_heif_opener
 import exifread
@@ -54,10 +53,9 @@ def list_image_files(folder_id):
     return results.get('files', [])
 
 def extract_exif(file_bytes):
-    """GPSと撮影日時をEXIFから取得"""
     lat = lon = dt = ''
     try:
-        # ---- 日時 (Pillowで取得) ----
+        # 撮影日時
         with Image.open(io.BytesIO(file_bytes)) as img:
             exif = img._getexif()
             if exif:
@@ -65,7 +63,7 @@ def extract_exif(file_bytes):
                     if ExifTags.TAGS.get(tag) == "DateTimeOriginal":
                         dt = value
 
-        # ---- GPS情報 (exifreadで処理) ----
+        # GPS情報
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
@@ -73,19 +71,16 @@ def extract_exif(file_bytes):
                 min_ = float(dms.values[1].num)/dms.values[1].den
                 sec = float(dms.values[2].num)/dms.values[2].den
                 dd = deg + min_/60 + sec/3600
-                if ref.values not in ['N', 'E']:
+                if ref.values not in ['N','E']:
                     dd = -dd
                 return dd
             lat = dms_to_dd(tags['GPS GPSLatitude'], tags['GPS GPSLatitudeRef'])
             lon = dms_to_dd(tags['GPS GPSLongitude'], tags['GPS GPSLongitudeRef'])
-
     except Exception as e:
         print(f"⚠️ EXIF not found: {e}")
-
     return lat, lon, dt
 
 def upload_file_to_github(local_bytes, path, commit_msg):
-    """GitHubにファイルをアップロード"""
     try:
         contents = repo.get_contents(path, ref=BRANCH_NAME)
         repo.update_file(path, commit_msg, local_bytes, contents.sha, branch=BRANCH_NAME)
@@ -93,8 +88,8 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ===== ポップアップ用JPEG作成（大きめ） =====
-def create_popup_jpeg(image, size=1600):
+# ポップアップ用JPEG（3倍サイズ）
+def create_popup_jpeg(image, size=2700):
     w, h = image.size
     if w > h:
         new_w = size
@@ -107,9 +102,8 @@ def create_popup_jpeg(image, size=1600):
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== 白枠丸アイコン生成 (WebP透過) =====
+# 白枠丸アイコン (透過WebP)
 def create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480):
-    """白枠付き丸アイコンを作る (透過WebP)"""
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
@@ -141,7 +135,7 @@ def create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_s
         icon.save(output, "WEBP", quality=95, method=6)
         return output.getvalue()
 
-# ===== キャッシュ読み込み =====
+# キャッシュ読み込み
 try:
     contents = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
     cached_files = json.loads(contents.decoded_content.decode())
@@ -167,7 +161,7 @@ for f in list_image_files(FOLDER_ID):
     popup_path = f"{IMAGES_DIR}/{base_name}_popup.jpg"
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.webp"
 
-    popup_bytes = create_popup_jpeg(image, 1600)
+    popup_bytes = create_popup_jpeg(image, 2700)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
     icon_bytes = create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480)
@@ -187,7 +181,7 @@ for f in list_image_files(FOLDER_ID):
 # キャッシュ保存
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# ===== HTML生成 =====
+# HTML生成
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -218,5 +212,7 @@ marker.bindPopup("<b>{row['filename']}</b><br>{row['datetime']}<br>"
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with round icons and large popups")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with large popups")
+print("HTML updated on GitHub with enlarged popups.")
+
 print("HTML updated on GitHub with fully round white-border icons and large popups.")
