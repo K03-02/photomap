@@ -85,17 +85,21 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ポップアップ用JPEG（幅2倍）
-def create_popup_jpeg_double_width(image):
+# ===== ポップアップ画像を最大400pxに縮小 =====
+def create_popup_jpeg_max400(image, max_size=400):
     w, h = image.size
-    new_w = w * 2
-    new_h = h * 2
+    if w > h:
+        new_w = max_size
+        new_h = int(h * max_size / w)
+    else:
+        new_h = max_size
+        new_w = int(w * max_size / h)
     resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
     with io.BytesIO() as output:
         resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# 白枠丸アイコン (透過WebP)
+# ===== アイコン生成（丸・白枠・80px） =====
 def create_round_icon_webp(image, final_diameter=80, border_thickness=6, base_size=480):
     w, h = image.size
     min_side = min(w, h)
@@ -128,7 +132,7 @@ def create_round_icon_webp(image, final_diameter=80, border_thickness=6, base_si
         icon.save(output, "WEBP", quality=95, method=6)
         return output.getvalue()
 
-# キャッシュ読み込み
+# ===== キャッシュ読み込み =====
 try:
     contents = repo.get_contents(CACHE_FILE, ref=BRANCH_NAME)
     cached_files = json.loads(contents.decoded_content.decode())
@@ -154,10 +158,11 @@ for f in list_image_files(FOLDER_ID):
     popup_path = f"{IMAGES_DIR}/{base_name}_popup.jpg"
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.webp"
 
-    # ポップアップ画像を幅2倍に
-    popup_bytes = create_popup_jpeg_double_width(image)
+    # ポップアップ画像（縦横最大400px）
+    popup_bytes = create_popup_jpeg_max400(image)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
+    # アイコン生成（丸・80px）
     icon_bytes = create_round_icon_webp(image, final_diameter=80)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
@@ -172,10 +177,10 @@ for f in list_image_files(FOLDER_ID):
     rows.append(row)
     cached_files[f['id']] = row
 
-# キャッシュ保存
+# ===== キャッシュ保存 =====
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# HTML生成（ポップアップ最大400px、スマホ対応）
+# ===== HTML生成（ポップアップ制限なし） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -199,13 +204,12 @@ var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).ad
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='width:400px; height:auto; max-width:100%; max-height:400px;'/>",
-    {{ maxWidth: 420 }}
+    + "<img src='{row['popup_url']}' style='width:auto; height:auto;'/>"
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup images doubled in width and icons 2/3 size")
-print("HTML updated on GitHub with popup images doubled in width and icons 2/3 size.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup images max400px and icons 2/3 size")
+print("HTML updated on GitHub with popup images max400px and icons 2/3 size.")
