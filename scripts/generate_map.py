@@ -56,10 +56,8 @@ def extract_exif(file_bytes):
     lat = lon = dt = ''
     try:
         tags = exifread.process_file(io.BytesIO(file_bytes), details=False)
-        # 撮影日時
         if 'EXIF DateTimeOriginal' in tags:
             dt = str(tags['EXIF DateTimeOriginal'])
-        # GPS
         if 'GPS GPSLatitude' in tags and 'GPS GPSLongitude' in tags:
             def dms_to_dd(dms, ref):
                 deg = float(dms.values[0].num)/dms.values[0].den
@@ -83,22 +81,14 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ===== ポップアップ画像を縦横最大400pxに縮小 =====
-def create_popup_jpeg_max400(image, max_size=400):
-    w, h = image.size
-    if w > h:
-        new_w = max_size
-        new_h = int(h * max_size / w)
-    else:
-        new_h = max_size
-        new_w = int(w * max_size / h)
-    resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+# ===== ポップアップ画像（元サイズのまま） =====
+def create_popup_jpeg(image):
     with io.BytesIO() as output:
-        resized.convert("RGB").save(output, "JPEG", quality=85)
+        image.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
-# ===== アイコン生成（丸・白枠・120px） =====
-def create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_size=480):
+# ===== アイコン生成（丸・白枠・元サイズ出力） =====
+def create_round_icon_webp(image, base_size=480, border_thickness=6):
     w, h = image.size
     min_side = min(w, h)
     left = (w - min_side)//2
@@ -125,9 +115,8 @@ def create_round_icon_webp(image, final_diameter=120, border_thickness=6, base_s
     draw_inner.ellipse((0,0,base_size,base_size), fill=255)
     canvas.paste(square, (border_thickness,border_thickness), mask_inner)
 
-    icon = canvas.resize((final_diameter, final_diameter), Image.Resampling.LANCZOS)
     with io.BytesIO() as output:
-        icon.save(output, "WEBP", quality=95, method=6)
+        canvas.save(output, "WEBP", quality=95, method=6)
         return output.getvalue()
 
 # ===== キャッシュ読み込み =====
@@ -156,12 +145,12 @@ for f in list_image_files(FOLDER_ID):
     popup_path = f"{IMAGES_DIR}/{base_name}_popup.jpg"
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.webp"
 
-    # ポップアップ画像（縦横最大400px）
-    popup_bytes = create_popup_jpeg_max400(image)
+    # ポップアップ画像（元サイズ）
+    popup_bytes = create_popup_jpeg(image)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    # アイコン生成（丸・120px）
-    icon_bytes = create_round_icon_webp(image, final_diameter=120)
+    # アイコン生成（元サイズ）
+    icon_bytes = create_round_icon_webp(image)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
@@ -178,7 +167,7 @@ for f in list_image_files(FOLDER_ID):
 # ===== キャッシュ保存 =====
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# ===== HTML生成（スマホでもポップアップ400px） =====
+# ===== HTML生成（サイズ制限なし、HTML側で調整可能） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -195,19 +184,19 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [120, 120],
+    iconSize: [120, 120], // HTML側で好きなサイズに変更可能
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='max-width:400px; width:100%; height:auto;'/>"
+    + "<img src='{row['popup_url']}' style='width:400px; height:auto;'/>" // HTMLで幅を自由に設定
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup images max400px and icons 120px, fixed EXIF")
-print("HTML updated on GitHub with popup images max400px, icons 120px, and fixed EXIF.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with adjustable popup and icon sizes")
+print("HTML updated on GitHub with EXIF fixed and sizes adjustable in HTML.")
