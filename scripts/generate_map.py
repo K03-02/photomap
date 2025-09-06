@@ -198,20 +198,21 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [120, 120],
+    iconSize: [80, 80],  // アイコンサイズを2/3に縮小
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='width:600px; height:auto;'/>",  // 固定幅600px
-    {{ maxWidth: 650, minWidth: 600 }}  // ポップアップ幅を画像に合わせる
+    + "<img src='{row['popup_url']}' style='width:400px; height:auto;'/>",  // ポップアップ幅を400pxに固定
+    {{ maxWidth: 450, minWidth: 400 }}  // ポップアップ幅を画像に合わせる
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with 600px popups")
-print("HTML updated on GitHub with 600px popups.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with 400px popups and smaller icons")
+print("HTML updated on GitHub with 400px popups and smaller icons.")
+
