@@ -81,7 +81,7 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ===== ポップアップ画像（元サイズのまま） =====
+# ===== ポップアップ画像（元サイズ） =====
 def create_popup_jpeg(image):
     with io.BytesIO() as output:
         image.convert("RGB").save(output, "JPEG", quality=85)
@@ -167,7 +167,7 @@ for f in list_image_files(FOLDER_ID):
 # ===== キャッシュ保存 =====
 upload_file_to_github(json.dumps(cached_files), CACHE_FILE, "Update photomap cache")
 
-# ===== HTML生成（サイズ制限なし、HTML側で調整可能） =====
+# ===== HTML生成（ポップアップ最大幅800px、アイコン自由調整） =====
 html_lines = [
     "<!DOCTYPE html>",
     "<html><head><meta charset='utf-8'><title>Photo Map</title>",
@@ -184,19 +184,20 @@ for row in rows:
         html_lines.append(f"""
 var icon = L.icon({{
     iconUrl: '{row['icon_url']}',
-    iconSize: [120, 120], // HTML側で好きなサイズに変更可能
+    iconSize: [80, 80], // アイコンはHTMLで自由に調整可能
     className: 'custom-icon'
 }});
 var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).addTo(map);
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='width:400px; height:auto;'/>" // HTMLで幅を自由に設定
+    + "<img src='{row['popup_url']}' style='max-width:800px; width:100%; height:auto;'/>",
+    {{ maxWidth: 850 }} // ポップアップが画面からはみ出さないように設定
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with adjustable popup and icon sizes")
-print("HTML updated on GitHub with EXIF fixed and sizes adjustable in HTML.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup max 800px and adjustable icon size")
+print("HTML updated on GitHub with popup max 800px and icon adjustable in HTML.")
