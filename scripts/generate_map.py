@@ -205,13 +205,13 @@ var marker = L.marker([{row['latitude']},{row['longitude']}], {{icon: icon}}).ad
 marker.bindPopup(
     "<b>{row['filename']}</b><br>{row['datetime']}<br>"
     + "<a href='https://www.google.com/maps/search/?api=1&query={row['latitude']},{row['longitude']}' target='_blank'>Google Mapsで開く</a><br>"
-    + "<img src='{row['popup_url']}' style='width:1200px; height:auto;'/>",  // 固定幅1200px
-    {{ maxWidth: 1300, minWidth: 1200 }}  // ポップアップ幅を画像に合わせる
+    + "<img src='{row['popup_url']}' style='width:600px; height:auto;'/>",  // 固定幅600px
+    {{ maxWidth: 650, minWidth: 600 }}  // ポップアップ幅を画像に合わせる
 );
 """)
 
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with fixed-width popups")
-print("HTML updated on GitHub with fixed-width popups.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with 600px popups")
+print("HTML updated on GitHub with 600px popups.")
