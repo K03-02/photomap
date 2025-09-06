@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 import subprocess
 import sys
-
-# ===== piexif を自動インストール =====
-try:
-    import piexif
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "piexif"])
-    import piexif
-
 import os
 import io
 import json
@@ -19,6 +11,13 @@ import exifread
 from github import Github, Auth
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+# ===== piexif を自動インストール =====
+try:
+    import piexif
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "piexif"])
+    import piexif
 
 register_heif_opener()
 
@@ -86,10 +85,14 @@ def upload_file_to_github(local_bytes, path, commit_msg):
         repo.create_file(path, commit_msg, local_bytes, branch=BRANCH_NAME)
     return f"https://{os.environ.get('GITHUB_USER','K03-02')}.github.io/photomap/{path}"
 
-# ポップアップ用JPEG（元サイズそのまま）
-def create_popup_jpeg(image):
+# ポップアップ用JPEG（幅2倍）
+def create_popup_jpeg_double_width(image):
+    w, h = image.size
+    new_w = w * 2
+    new_h = h * 2
+    resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
     with io.BytesIO() as output:
-        image.convert("RGB").save(output, "JPEG", quality=85)
+        resized.convert("RGB").save(output, "JPEG", quality=85)
         return output.getvalue()
 
 # 白枠丸アイコン (透過WebP)
@@ -151,10 +154,11 @@ for f in list_image_files(FOLDER_ID):
     popup_path = f"{IMAGES_DIR}/{base_name}_popup.jpg"
     icon_path = f"{IMAGES_DIR}/{base_name}_icon.webp"
 
-    popup_bytes = create_popup_jpeg(image)
+    # ポップアップ画像を幅2倍に
+    popup_bytes = create_popup_jpeg_double_width(image)
     popup_url = upload_file_to_github(popup_bytes, popup_path, f"Upload popup {base_name}")
 
-    icon_bytes = create_round_icon_webp(image, final_diameter=80)  # アイコン2/3
+    icon_bytes = create_round_icon_webp(image, final_diameter=80)
     icon_url = upload_file_to_github(icon_bytes, icon_path, f"Upload round icon {base_name}")
 
     row = {
@@ -203,5 +207,5 @@ marker.bindPopup(
 html_lines.append("</script></body></html>")
 
 html_str = "\n".join(html_lines)
-upload_file_to_github(html_str, HTML_NAME, "Update HTML with responsive popups max 400px and smaller icons")
-print("HTML updated on GitHub with responsive popups max 400px and icons 2/3 size.")
+upload_file_to_github(html_str, HTML_NAME, "Update HTML with popup images doubled in width and icons 2/3 size")
+print("HTML updated on GitHub with popup images doubled in width and icons 2/3 size.")
